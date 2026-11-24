@@ -23,9 +23,9 @@ typedef struct {
     sqlite3 *base;
     RedEnvio *red;
     Sensor sensor;
-    sqlite3_int64 seq_en_curso;
-    unsigned int intervalo_s, retroceso_s;
-    double inicio, proxima_lectura, proximo_envio;
+    sqlite3_int64 seq_en_curso, seq_ultima, seq_latido, pendientes_latido;
+    unsigned int intervalo_s, latido_s, retroceso_s;
+    double inicio, proxima_lectura, proximo_envio, proximo_latido;
 } EstadoEnvio;
 
 static volatile sig_atomic_t detener = 0;
@@ -41,30 +41,44 @@ static void pedir_salida(int senal) {
 }
 
 /**
- * @brief Lee y valida la identidad y el intervalo de la configuracion guardada.
- * @param estado Estado que recibe el intervalo.
- * @param matricula Identidad del entorno.
- * @return 1 si la configuracion permite empezar; 0 si falta o es invalida.
+ * @brief Lee un periodo positivo de la configuracion guardada.
+ * @param base Base abierta.
+ * @param clave Nombre de la opcion.
+ * @param segundos Recibe el numero de segundos.
+ * @return 1 si la opcion es valida; 0 si falta o no es un entero positivo.
  */
-static int preparar_configuracion(EstadoEnvio *estado, const char *matricula) {
-    char guardada[32], intervalo[32], *fin;
+static int leer_periodo(sqlite3 *base, const char *clave, unsigned int *segundos) {
+    char intervalo[32], *fin;
     unsigned long numero;
-    if (!datos_leer_config(estado->base, "matricula", guardada, sizeof(guardada)) ||
-        !datos_leer_config(estado->base, "intervalo_s", intervalo,
-                           sizeof(intervalo))) {
-        fputs("Primero ejecuta config.\n", stderr);
+    if (!datos_leer_config(base, clave, intervalo, sizeof(intervalo))) {
         return 0;
     }
     errno = 0;
     numero = strtoul(intervalo, &fin, 10);
-    if (strcmp(guardada, matricula) != 0 ||
-        !isdigit((unsigned char)intervalo[0]) || *fin != '\0' ||
+    if (!isdigit((unsigned char)intervalo[0]) || *fin != '\0' ||
         errno == ERANGE || numero == 0 || numero > UINT_MAX) {
-        fputs("La matricula o intervalo_s de config no son validos.\n", stderr);
+        fprintf(stderr, "config.%s no es un periodo valido.\n", clave);
         return 0;
     }
-    estado->intervalo_s = (unsigned int)numero;
+    *segundos = (unsigned int)numero;
     return 1;
+}
+
+/**
+ * @brief Comprueba la identidad y los periodos del sensor y de los latidos.
+ * @param estado Estado que recibe ambos periodos.
+ * @param matricula Identidad del entorno.
+ * @return 1 si la configuracion permite empezar; 0 si falta o es invalida.
+ */
+static int preparar_configuracion(EstadoEnvio *estado, const char *matricula) {
+    char guardada[32];
+    if (!datos_leer_config(estado->base, "matricula", guardada, sizeof(guardada)) ||
+        strcmp(guardada, matricula) != 0) {
+        fputs("Primero ejecuta config para esta matricula.\n", stderr);
+        return 0;
+    }
+    return leer_periodo(estado->base, "intervalo_s", &estado->intervalo_s) &&
+           leer_periodo(estado->base, "latido_s", &estado->latido_s);
 }
 
 /**
@@ -89,6 +103,7 @@ static int guardar_lectura(EstadoEnvio *estado, double ahora) {
     }
     printf("Guardada seq=%lld temp=%.2f corriente=%.2f pendientes=%lld\n",
            (long long)seq, temp, corriente, (long long)pendientes);
+    estado->seq_ultima = seq;
     estado->proxima_lectura += estado->intervalo_s;
     /* Una suspension larga del equipo no inventa mediciones del pasado. */
     if (estado->proxima_lectura <= ahora) {
@@ -205,6 +220,65 @@ static int procesar_respuesta(EstadoEnvio *estado, double ahora) {
 }
 
 /**
+ * @brief Muestra el resultado de la publicacion sin afectar la cola HTTP.
+ * @param estado Estado que conserva los datos del latido que se publico.
+ * @return No devuelve un valor.
+ */
+static void recoger_latido(EstadoEnvio *estado) {
+    int correcto;
+    if (red_latido_recoger(estado->red, &correcto)) {
+        printf("Latido MQTT %s: seq=%lld pendientes=%lld\n",
+               correcto ? "enviado" : "descartado",
+               (long long)estado->seq_latido,
+               (long long)estado->pendientes_latido);
+    }
+}
+
+/**
+ * @brief Publica el estado actual cuando corresponde, sin encolar latidos.
+ * @param estado Estado de la sesion.
+ * @param ahora Tiempo monotono actual.
+ * @return 1 si continua; 0 si fallo la consulta de pendientes.
+ */
+static int programar_latido(EstadoEnvio *estado, double ahora) {
+    char texto[100];
+    sqlite3_int64 pendientes;
+    time_t ts;
+    int n;
+    if (ahora < estado->proximo_latido) {
+        return 1;
+    }
+    estado->proximo_latido += estado->latido_s;
+    if (estado->proximo_latido <= ahora) {
+        estado->proximo_latido = ahora + estado->latido_s;
+    }
+    if (red_latido_ocupado(estado->red)) {
+        puts("Latido omitido: la publicacion anterior sigue en curso.");
+        return 1;
+    }
+    if (!datos_contar_pendientes(estado->base, &pendientes)) {
+        return 0;
+    }
+    ts = time(NULL);
+    if (ts == (time_t)-1) {
+        fputs("No se pudo leer la fecha del latido; se descarta.\n", stderr);
+        return 1;
+    }
+    n = snprintf(texto, sizeof(texto), "LATIDO;%lld;%lld;%lld\n",
+                 (long long)estado->seq_ultima, (long long)pendientes,
+                 (long long)ts);
+    if (n < 0 || (size_t)n >= sizeof(texto)) {
+        fputs("El latido no cabe; se descarta.\n", stderr);
+        return 1;
+    }
+    if (red_latido_iniciar(estado->red, texto)) {
+        estado->seq_latido = estado->seq_ultima;
+        estado->pendientes_latido = pendientes;
+    }
+    return 1;
+}
+
+/**
  * @brief Alterna tareas cortas sin dormir durante todo Retry-After.
  * @param estado Estado de la sesion.
  * @param duracion_s Limite opcional; 0 significa hasta Ctrl+C.
@@ -225,8 +299,12 @@ static int ejecutar_bucle(EstadoEnvio *estado, unsigned int duracion_s) {
         if (!procesar_respuesta(estado, ahora)) {
             return 0;
         }
+        recoger_latido(estado);
         if (!red_envio_ocupado(estado->red) && ahora >= estado->proximo_envio &&
             !iniciar_pendiente(estado)) {
+            return 0;
+        }
+        if (!programar_latido(estado, ahora)) {
             return 0;
         }
         if (!red_envio_avanzar(estado->red, 100)) {
@@ -236,6 +314,7 @@ static int ejecutar_bucle(EstadoEnvio *estado, unsigned int duracion_s) {
     /* Si ya llego la confirmacion, se registra antes de cerrar. */
     {
         double ahora;
+        recoger_latido(estado);
         return tiempo_monotono(&ahora) && procesar_respuesta(estado, ahora);
     }
 }
@@ -243,11 +322,14 @@ static int ejecutar_bucle(EstadoEnvio *estado, unsigned int duracion_s) {
 /**
  * @brief Mantiene la cola y el sensor hasta el limite o la solicitud de salida.
  * @param conexion Conexion HTTP autenticada.
+ * @param host Servidor leido del entorno, compartido por HTTP y MQTT.
  * @param matricula Identidad del entorno, que debe coincidir con config.
+ * @param token Clave del entorno para autenticar los latidos MQTT.
  * @param duracion_s Limite opcional en segundos; 0 indica sin limite.
  * @return 1 si termino normalmente y libero sus recursos; 0 ante un error.
  */
-int enviar(Conexion *conexion, const char *matricula, unsigned int duracion_s) {
+int enviar(Conexion *conexion, const char *host, const char *matricula,
+            const char *token, unsigned int duracion_s) {
     EstadoEnvio estado = {0};
     void (*anterior_int)(int), (*anterior_term)(int);
     sqlite3_int64 pendientes;
@@ -280,6 +362,7 @@ int enviar(Conexion *conexion, const char *matricula, unsigned int duracion_s) {
     }
     estado.red = red_envio_abrir(conexion);
     if (estado.red == NULL ||
+        !red_latido_preparar(estado.red, host, matricula, token) ||
         !datos_contar_pendientes(estado.base, &pendientes)) {
         goto terminar_envio;
     }
@@ -287,8 +370,10 @@ int enviar(Conexion *conexion, const char *matricula, unsigned int duracion_s) {
     estado.retroceso_s = 1;
     estado.proxima_lectura = estado.inicio;
     estado.proximo_envio = estado.inicio;
-    printf("Telemetria: intervalo_s=%u; pendientes=%lld. Ctrl+C para detener.\n",
-           estado.intervalo_s, (long long)pendientes);
+    estado.proximo_latido = estado.inicio;
+    printf("Telemetria: intervalo_s=%u; latido_s=%u; pendientes=%lld. "
+           "Ctrl+C para detener.\n", estado.intervalo_s, estado.latido_s,
+           (long long)pendientes);
     correcto = ejecutar_bucle(&estado, duracion_s);
 
 terminar_envio:

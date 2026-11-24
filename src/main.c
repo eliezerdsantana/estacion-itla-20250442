@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     if (strcmp(argv[1], "enviar") == 0) {
-        correcto = enviar(&conexion, matricula, duracion_s);
+        correcto = enviar(&conexion, host, matricula, token, duracion_s);
         red_cerrar(&conexion);
         return correcto ? 0 : 1;
     }
