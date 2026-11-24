@@ -11,6 +11,7 @@
 #include "red.h"
 
 /* Genera, guarda y envia hasta Ctrl+C o hasta duracion_s; 0 indica sin limite. */
-int enviar(Conexion *conexion, const char *matricula, unsigned int duracion_s);
+int enviar(Conexion *conexion, const char *host, const char *matricula,
+            const char *token, unsigned int duracion_s);
 
 #endif

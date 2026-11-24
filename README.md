@@ -18,7 +18,8 @@ El analisis ya fue aceptado por el servidor del curso. El avance de enviar
 incluye sensor simulado, cola persistente y reintentos. La prueba corta en
 Windows confirmo las seis lecturas generadas, con cero pendientes al terminar.
 
-Quedan pendientes los latidos MQTT, escuchar y la sesion completa de evaluacion.
+El envio ya incluye los latidos MQTT. Quedan pendientes escuchar y la sesion
+completa de evaluacion; cada avance se prueba tambien en el equipo.
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
@@ -325,9 +326,9 @@ python3 pruebas/verificar_envio.py
 Las 19 comprobaciones anteriores tambien siguen pasando. Estas pruebas solo
 usan 127.0.0.1, bases temporales y una credencial aleatoria de prueba.
 
-Este avance todavia no publica latidos ni recibe alarmas. La prueba corta
-comprueba el funcionamiento inicial; la evaluacion de los niveles 3 a 5
-requiere la sesion continua de 15 minutos o mas con todos esos componentes.
+El envio tambien publica latidos. La recepcion de alarmas sigue pendiente.
+La evaluacion de los niveles 3 a 5 requiere la sesion continua de 15 minutos
+o mas con todos esos componentes.
 
 El 24 de noviembre ejecute enviar durante 30 segundos en Windows. Las seis
 mediciones se guardaron y el servidor del curso confirmo todas con HTTP 201.
@@ -349,3 +350,63 @@ Los servidores locales de prueba cierran explicitamente sus conexiones
 SQLite para que Windows pueda liberar los archivos temporales.
 
 [Referencia de setvbuf de Microsoft](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setvbuf)
+
+## Latidos MQTT
+
+Durante enviar se publica un aviso cada latido_s segundos, segun config.
+Con la configuracion del curso son diez segundos. El topico es
+itla/estudiantes/<MATRICULA>/latido, en el mismo host, puerto 1883.
+El usuario es la matricula y la contraseña es el mismo token del entorno.
+La clave no se agrega a la URL ni se imprime.
+
+El texto tiene este formato y termina en salto de linea:
+
+~~~text
+LATIDO;<seq>;<pendientes>;<ts>
+~~~
+
+seq indica la ultima medicion generada. pendientes es cuantas lecturas
+esperan confirmacion HTTP, y ts indica el momento de preparar ese latido.
+Estos valores son una instantanea: una confirmacion HTTP puede llegar despues
+de prepararlos y antes de que aparezca la linea del latido en la terminal.
+
+HTTP y MQTT tienen manejadores separados dentro de la misma interfaz multi.
+Mientras HTTP espera Retry-After, las mediciones siguen guardandose y los
+latidos siguen publicandose. Una falla de MQTT tampoco detiene el envio HTTP.
+
+Los latidos usan QoS 0. Si una publicacion falla, se descarta: la siguiente
+usa la secuencia, pendientes y fecha actuales. No se guardan latidos en la
+cola de SQLite ni se reenvian los que se perdieron. Si una publicacion
+sigue activa cuando toca otra, se omite ese turno.
+
+Latido MQTT enviado significa que libcurl termino la publicacion sin error.
+QoS 0 no entrega un PUBACK; la recepcion que registra el servidor se consulta
+en mi-progreso durante la evaluacion completa.
+
+Para una comprobacion corta de HTTP y MQTT:
+
+~~~bash
+make run ARGS="enviar --duracion 45"
+~~~
+
+Con intervalo_s=5 y latido_s=10, normalmente se generan nueve mediciones y
+cinco latidos durante esos 45 segundos. La numeracion continua desde la
+ultima medicion que ya estaba guardada.
+
+## Pruebas de los latidos
+
+~~~bash
+python3 pruebas/verificar_latidos.py
+~~~
+
+Diez casos usan el servidor HTTP local y un broker MQTT minimo, implementado
+con la biblioteca estandar de Python. El broker decodifica CONNECT y PUBLISH
+para comprobar usuario, clave de prueba, topico, QoS 0 y formato del mensaje.
+Nunca usa la contraseña real ni contacta el servidor del profesor.
+
+Los casos comprueban el periodo configurado, los latidos durante dos caidas
+HTTP, una respuesta HTTP lenta, rechazo o cierre de MQTT, recuperacion sin
+repetir un latido antiguo, reinicio con secuencia persistente y validacion
+de la configuracion. Las pruebas se ejecutan en Linux y Windows.
+
+[Formato MQTT de curl](https://everything.curl.dev/usingcurl/mqtt.html)

@@ -46,6 +46,11 @@ El siguiente avance son los latidos MQTT, para que el servidor sepa que
 la estacion sigue funcionando. Despues se añaden las alarmas y se prueba
 la sesion completa, incluidas las caidas programadas del servidor del curso.
 
+Los latidos estan preparados en avance-latidos. Diez casos locales
+comprobaron el formato MQTT, la autenticacion y la independencia del HTTP.
+La casilla sigue pendiente hasta probar el avance en el equipo y subirlo
+a main. La sesion completa de evaluacion sigue siendo una casilla aparte.
+
 ## Metodo de estudio
 
 Primero describo la intencion en español. Despues leo como se expresa en C,

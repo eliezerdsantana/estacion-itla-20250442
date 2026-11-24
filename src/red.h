@@ -38,6 +38,13 @@ int red_envio_avanzar(RedEnvio *envio, int espera_ms);
 int red_envio_recoger(RedEnvio *envio, ResultadoEnvio *resultado);
 int red_envio_cerrar(RedEnvio *envio);
 
+/* Publicacion MQTT QoS 0 independiente del HTTP, dentro del mismo multi. */
+int red_latido_preparar(RedEnvio *envio, const char *host,
+                        const char *matricula, const char *token);
+int red_latido_ocupado(const RedEnvio *envio);
+int red_latido_iniciar(RedEnvio *envio, const char *texto);
+int red_latido_recoger(RedEnvio *envio, int *correcto);
+
 /* Abre la conexion HTTP usando el host y el token; devuelve 1 si funciona. */
 int red_abrir(Conexion *conexion, const char *host, const char *token);
 

@@ -39,6 +39,9 @@ struct RedEnvio {
     Buffer buffer;
     char json[512];
     ResultadoEnvio resultado;
+    CURL *latido;
+    int latido_activo, latido_completo, latido_correcto;
+    char texto_latido[100];
 };
 
 /**
@@ -472,6 +475,20 @@ int red_envio_avanzar(RedEnvio *envio, int espera_ms) {
             }
             envio->activo = 0;
             envio->completo = 1;
+        } else if (mensaje->msg == CURLMSG_DONE &&
+                   mensaje->easy_handle == envio->latido) {
+            CURLcode estado = mensaje->data.result;
+            if (curl_multi_remove_handle(envio->multi, envio->latido) != CURLM_OK) {
+                fputs("No se pudo retirar la publicacion MQTT.\n", stderr);
+                return 0;
+            }
+            envio->latido_activo = 0;
+            envio->latido_completo = 1;
+            envio->latido_correcto = estado == CURLE_OK;
+            if (estado != CURLE_OK) {
+                fprintf(stderr, "Fallo de latido MQTT: %s\n",
+                        curl_easy_strerror(estado));
+            }
         }
     }
     return 1;
@@ -508,6 +525,13 @@ int red_envio_cerrar(RedEnvio *envio) {
         curl_multi_remove_handle(envio->multi, manejador) != CURLM_OK) {
         correcto = 0;
     }
+    if (envio->latido_activo &&
+        curl_multi_remove_handle(envio->multi, envio->latido) != CURLM_OK) {
+        correcto = 0;
+    }
+    if (envio->latido != NULL) {
+        curl_easy_cleanup(envio->latido);
+    }
     if (curl_multi_cleanup(envio->multi) != CURLM_OK) {
         correcto = 0;
     }
@@ -524,4 +548,115 @@ int red_envio_cerrar(RedEnvio *envio) {
         fputs("No se pudieron liberar todos los recursos de envio.\n", stderr);
     }
     return correcto;
+}
+
+/**
+ * @brief Prepara un easy exclusivo para publicar latidos por MQTT.
+ * @param envio Estado multi ya abierto para la sesion de enviar.
+ * @param host Servidor validado al abrir la conexion HTTP.
+ * @param matricula Usuario MQTT y parte del topico; solo admite digitos.
+ * @param token Clave leida del entorno, que no se agrega a la URL ni se imprime.
+ * @return 1 si MQTT esta disponible y configurado; 0 si no pudo prepararse.
+ */
+int red_latido_preparar(RedEnvio *envio, const char *host,
+                        const char *matricula, const char *token) {
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    const char *const *protocolo;
+    char url[512];
+    size_t i, longitud = strlen(matricula);
+    int disponible = 0, n;
+
+    for (protocolo = version != NULL ? version->protocols : NULL;
+         protocolo != NULL && *protocolo != NULL; protocolo++) {
+        if (strcmp(*protocolo, "mqtt") == 0) {
+            disponible = 1;
+        }
+    }
+    if (!disponible) {
+        fputs("La libcurl vinculada no incluye MQTT.\n", stderr);
+        return 0;
+    }
+    if (longitud == 0 || longitud > 31 || strlen(token) != 32) {
+        fputs("Formato de credenciales MQTT incorrecto.\n", stderr);
+        return 0;
+    }
+    for (i = 0; i < longitud; i++) {
+        if (!isdigit((unsigned char)matricula[i])) {
+            fputs("La matricula MQTT solo puede contener digitos.\n", stderr);
+            return 0;
+        }
+    }
+    n = snprintf(url, sizeof(url),
+        "mqtt://%s:1883/itla/estudiantes/%s/latido", host, matricula);
+    if (n < 0 || (size_t)n >= sizeof(url)) {
+        fputs("La URL MQTT supera el espacio disponible.\n", stderr);
+        return 0;
+    }
+    envio->latido = curl_easy_init();
+    if (envio->latido == NULL) {
+        fputs("No se pudo reservar el manejador MQTT.\n", stderr);
+        return 0;
+    }
+    if (curl_easy_setopt(envio->latido, CURLOPT_URL, url) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_USERNAME, matricula) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_PASSWORD, token) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_CONNECTTIMEOUT_MS, 3000L) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_TIMEOUT_MS, 5000L) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_FORBID_REUSE, 1L) != CURLE_OK) {
+        fputs("No se pudieron configurar los latidos MQTT.\n", stderr);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Indica si la publicacion anterior sigue activa o falta recogerla.
+ * @param envio Estado consultado.
+ * @return 1 si esta ocupado; 0 si puede publicar un latido nuevo.
+ */
+int red_latido_ocupado(const RedEnvio *envio) {
+    return envio->latido_activo || envio->latido_completo;
+}
+
+/**
+ * @brief Conserva el texto mientras libcurl publica sin bloquear.
+ * @param envio Estado con MQTT ya configurado.
+ * @param texto Linea LATIDO terminada en salto de linea, menor de 100 bytes.
+ * @return 1 si pudo comenzar; 0 si no esta preparado o el texto no cabe.
+ */
+int red_latido_iniciar(RedEnvio *envio, const char *texto) {
+    size_t longitud = strlen(texto);
+    if (envio->latido == NULL || red_latido_ocupado(envio) ||
+        longitud == 0 || longitud >= sizeof(envio->texto_latido) ||
+        texto[longitud - 1] != '\n') {
+        fputs("No se pudo preparar el texto del latido.\n", stderr);
+        return 0;
+    }
+    memcpy(envio->texto_latido, texto, longitud + 1);
+    if (curl_easy_setopt(envio->latido, CURLOPT_POSTFIELDSIZE,
+                         (long)longitud) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_POSTFIELDS,
+                         envio->texto_latido) != CURLE_OK ||
+        curl_multi_add_handle(envio->multi, envio->latido) != CURLM_OK) {
+        fputs("No se pudo iniciar la publicacion MQTT.\n", stderr);
+        return 0;
+    }
+    envio->latido_activo = 1;
+    return 1;
+}
+
+/**
+ * @brief Recoge el resultado local del envio; QoS 0 no entrega un PUBACK.
+ * @param envio Estado MQTT.
+ * @param correcto Recibe 1 si libcurl termino sin error; 0 si el latido se perdio.
+ * @return 1 si habia un resultado nuevo; 0 si la publicacion no termino.
+ */
+int red_latido_recoger(RedEnvio *envio, int *correcto) {
+    if (!envio->latido_completo) {
+        return 0;
+    }
+    *correcto = envio->latido_correcto;
+    envio->latido_completo = 0;
+    return 1;
 }
