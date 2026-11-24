@@ -16,7 +16,7 @@ Santo Domingo. Clase: miercoles 25 a las 18:00.
 ## Checklist del martes 24
 
 - [x] Recuperar la sesion y comprobar config.
-- [ ] Implementar, probar y subir descargar.
+- [x] Implementar, probar y subir descargar. Commit 71884a1.
 - [ ] Implementar, probar y subir analizar.
 - [ ] Preparar la cola de telemetria y sus reintentos.
 - [ ] Añadir los latidos MQTT.
@@ -28,9 +28,13 @@ probado se guarda en un commit propio.
 
 ## Punto actual
 
-La version de descargar esta preparada para probarla en el equipo con el
-servidor del curso. La casilla sigue pendiente hasta completar esa prueba y
-subir el siguiente commit.
+La descarga fue aceptada por el servidor: 2000 filas unicas y suma de IDs
+7615032, correcto=1. Se subio el commit 71884a1 y el equipo quedo limpio.
+
+El analisis se prepara en una rama de prueba. La ejecucion normal solo muestra
+el informe local; --enviar solicita una evaluacion. La casilla del analisis
+sigue pendiente hasta probarlo con los datos personales y subir el avance
+comprobado a main.
 
 ## Metodo de estudio
 
