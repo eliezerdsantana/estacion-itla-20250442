@@ -7,6 +7,7 @@
  */
 #include "datos.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -451,6 +452,89 @@ int datos_resumen_descarga(sqlite3 *base, sqlite3_int64 *filas,
     }
 
 terminar_resumen:
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Clasifica las lecturas y calcula las seis estadisticas con SQL.
+ * @param base Base que contiene la instantanea descargada.
+ * @param umbral Limite de temperatura leido de config.
+ * @param resumen Recibe una fila por maquina, de M1 a M4.
+ * @return 1 si la consulta termino; 0 si hubo un error.
+ */
+int datos_analizar(sqlite3 *base, double umbral,
+                    ResumenMaquina resumen[CANT_MAQUINAS]) {
+    const char *maquinas[] = {"M1", "M2", "M3", "M4"};
+    const char *sql =
+        "WITH maquinas(maquina) AS (VALUES ('M1'),('M2'),('M3'),('M4')),"
+        "clasificadas AS ("
+        " SELECT *, CASE WHEN id IS NOT NULL AND maquina IS NOT NULL"
+        " AND maquina<>'' AND ts IS NOT NULL AND temp IS NOT NULL"
+        " AND corriente IS NOT NULL AND vibracion IS NOT NULL"
+        " AND estado='OK' AND temp<>-999.0 THEN 1 ELSE 0 END AS valida"
+        " FROM lecturas_planta)"
+        " SELECT m.maquina,"
+        " COUNT(CASE WHEN l.valida=1 THEN 1 END),"
+        " COUNT(CASE WHEN l.valida=0 THEN 1 END),"
+        " MIN(CASE WHEN l.valida=1 THEN l.temp END),"
+        " MAX(CASE WHEN l.valida=1 THEN l.temp END),"
+        " ROUND(AVG(CASE WHEN l.valida=1 THEN l.temp END),2),"
+        " SUM(CASE WHEN l.valida=1 AND l.temp>? THEN 1 ELSE 0 END)"
+        " FROM maquinas AS m LEFT JOIN clasificadas AS l"
+        " ON l.maquina=m.maquina GROUP BY m.maquina ORDER BY m.maquina;";
+    sqlite3_stmt *sentencia = NULL;
+    int correcto = 0;
+    int i;
+
+    memset(resumen, 0, CANT_MAQUINAS * sizeof(*resumen));
+    if (!isfinite(umbral) ||
+        sqlite3_prepare_v2(base, sql, -1, &sentencia, NULL) != SQLITE_OK ||
+        sqlite3_bind_double(sentencia, 1, umbral) != SQLITE_OK) {
+        fprintf(stderr, "No se pudo preparar el analisis: %s\n",
+                sqlite3_errmsg(base));
+        goto terminar_analisis;
+    }
+    /* El bucle copia las cuatro filas del resultado; SQL hace los calculos. */
+    for (i = 0; i < CANT_MAQUINAS; i++) {
+        const unsigned char *maquina;
+        ResumenMaquina *r = &resumen[i];
+
+        if (sqlite3_step(sentencia) != SQLITE_ROW) {
+            fputs("Falta una maquina en el resultado SQL.\n", stderr);
+            goto terminar_analisis;
+        }
+        maquina = sqlite3_column_text(sentencia, 0);
+        if (maquina == NULL ||
+            strcmp((const char *)maquina, maquinas[i]) != 0) {
+            fputs("El analisis contiene una maquina inesperada.\n", stderr);
+            goto terminar_analisis;
+        }
+        memcpy(r->maquina, maquinas[i], sizeof(r->maquina));
+        r->validas = sqlite3_column_int64(sentencia, 1);
+        r->descartadas = sqlite3_column_int64(sentencia, 2);
+        r->sobre_umbral = sqlite3_column_int64(sentencia, 6);
+        r->tiene_temperaturas = sqlite3_column_type(sentencia, 3) != SQLITE_NULL;
+        if (r->tiene_temperaturas) {
+            r->temp_min = sqlite3_column_double(sentencia, 3);
+            r->temp_max = sqlite3_column_double(sentencia, 4);
+            r->temp_prom = sqlite3_column_double(sentencia, 5);
+            if (!isfinite(r->temp_min) || !isfinite(r->temp_max) ||
+                !isfinite(r->temp_prom)) {
+                fputs("Las estadisticas no contienen numeros finitos.\n", stderr);
+                goto terminar_analisis;
+            }
+        }
+    }
+    if (sqlite3_step(sentencia) != SQLITE_DONE) {
+        fprintf(stderr, "El analisis SQL no termino: %s\n", sqlite3_errmsg(base));
+        goto terminar_analisis;
+    }
+    correcto = 1;
+
+terminar_analisis:
     if (!liberar_sentencia(&sentencia)) {
         correcto = 0;
     }

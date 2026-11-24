@@ -16,8 +16,8 @@ Santo Domingo. Clase: miercoles 25 a las 18:00.
 ## Checklist del martes 24
 
 - [x] Recuperar la sesion y comprobar config.
-- [ ] Implementar, probar y subir descargar.
-- [ ] Implementar, probar y subir analizar.
+- [x] Implementar, probar y subir descargar. Commit 71884a1.
+- [x] Implementar, probar y subir analizar. Servidor: 24/24 al primer intento.
 - [ ] Preparar la cola de telemetria y sus reintentos.
 - [ ] Añadir los latidos MQTT.
 - [ ] Añadir la recepcion y confirmacion de alarmas.
@@ -28,9 +28,16 @@ probado se guarda en un commit propio.
 
 ## Punto actual
 
-La version de descargar esta preparada para probarla en el equipo con el
-servidor del curso. La casilla sigue pendiente hasta completar esa prueba y
-subir el siguiente commit.
+La descarga fue aceptada por el servidor: 2000 filas unicas y suma de IDs
+7615032, correcto=1. Se subio el commit 71884a1 y el equipo quedo limpio.
+
+El analisis del codigo e78804e se probo en Linux y Windows. El servidor del
+curso confirmo los 24 campos en el primer intento, con intentos_restantes=9.
+Las cuatro maquinas suman 1931 lecturas validas y 69 descartadas.
+La evidencia esta en pruebas/validacion_analisis.md.
+
+El siguiente avance es guardar cada lectura propia antes de intentar enviarla
+y recuperar las pendientes cuando vuelva a funcionar la conexion.
 
 ## Metodo de estudio
 

@@ -5,7 +5,7 @@ Programacion para Mecatronicos, seccion de los miercoles.
 
 ## Avance actual
 
-Ya estan implementados `config` y `descargar`.
+Ya estan implementados `config`, `descargar` y `analizar`.
 
 `config` pide la configuracion al servidor, comprueba la respuesta HTTP y guarda
 los siete campos en SQLite. Despues imprime los valores consultados de la base.
@@ -14,8 +14,9 @@ los siete campos en SQLite. Despues imprime los valores consultados de la base.
 el numero de filas y la suma de IDs con SQL. Envia esos resultados al servidor
 y comprueba que la respuesta contenga la linea `correcto=1`.
 
-Quedan pendientes `analizar`, `enviar` y `escuchar`, junto con el modulo del
-sensor y las pruebas de los niveles siguientes.
+Quedan pendientes `enviar` y `escuchar`, junto con el modulo del sensor y las
+pruebas de los niveles siguientes. El analisis se comprueba primero de forma
+local antes de solicitar su evaluacion.
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
@@ -151,8 +152,9 @@ incluidos en el proyecto. En la preparacion con ChatGPT se ejecutaron las
 prueba. Estas cubrieron 2000 filas, IDs con saltos, paginas repetidas, campos
 ausentes, errores de red y recuperacion de la copia anterior con ROLLBACK.
 
-La prueba en Windows y la confirmacion del servidor del curso se realizan
-despues de copiar este avance al equipo.
+Config y descargar tambien se probaron en Windows. El servidor del curso
+confirmo 2000 filas unicas y suma_ids=7615032 con correcto=1 antes de subir
+el commit 71884a1.
 
 ## Apoyo utilizado
 
@@ -166,3 +168,82 @@ el codigo por partes para poder explicar su funcionamiento en la defensa.
 - [Documentacion de libcurl](https://curl.se/libcurl/c/).
 - [Documentacion de SQLite en C](https://www.sqlite.org/cintro.html).
 - [Paquetes y herramientas de MSYS2](https://www.msys2.org/docs/package-management/).
+
+## Proposito del programa
+
+Esta estacion recibe las mediciones de cuatro maquinas, las conserva en SQLite
+y prepara un informe por maquina. Las etapas siguientes añadiran el envio de
+lecturas propias, los latidos y la confirmacion de alarmas.
+
+## Analisis por maquina
+
+El modulo src/analisis.c coordina el informe y su envio opcional. Todos los
+calculos SQLite siguen en src/datos.c, con su interfaz en src/datos.h.
+
+Para ver el informe sin consumir intentos de evaluacion:
+
+~~~bash
+make run ARGS=analizar
+~~~
+
+En Windows tambien sirve ./estacion.exe analizar. El informe local usa la
+configuracion y las lecturas guardadas; no hace ninguna peticion HTTP.
+
+La consulta SQL clasifica cada fila. Es valida si todos sus campos estan
+presentes, estado es exactamente OK y temp es diferente de -999.0. No se
+borran las filas invalidas: se cuentan como descartadas de su maquina.
+
+SQL calcula validas, descartadas, temp_min, temp_max, temp_prom y sobre_umbral.
+El promedio se redondea a dos decimales. Sobre el umbral significa estrictamente
+temp > umbral_temp; una temperatura igual al umbral no se cuenta.
+
+Una maquina sin lecturas validas conserva NULL en sus temperaturas. No se
+inventan ceros para sustituirlas, ni se envia una evaluacion en esa situacion.
+Tambien se evita enviar si faltan lecturas para completar las 2000, si aparece
+una maquina desconocida o si la configuracion pertenece a otra matricula.
+
+Despues de revisar el informe local, una evaluacion se solicita explicitamente:
+
+~~~bash
+make run ARGS="analizar --enviar"
+~~~
+
+Ese comando envia las cuatro maquinas en un solo JSON. No reintenta el POST:
+cada evaluacion puede consumir un intento. HTTP 200 por si solo no basta;
+se exigen las 24 lineas distintas de confirmacion con valor exactamente ok.
+El servidor permite como maximo diez intentos y la meta es acertar en tres
+o menos.
+
+## Pruebas del analisis
+
+Las 19 pruebas de pruebas/verificar_analisis.py crean una base temporal y un
+servidor HTTP en 127.0.0.1. Usan una credencial aleatoria exclusiva de prueba:
+nunca necesitan el token personal ni contactan el servidor del profesor.
+
+Un calculo independiente en Python comprueba los seis campos de cada maquina.
+Los casos incluyen campos ausentes, temperatura -999 aunque estado sea OK,
+estados con mayusculas o espacios diferentes, valores cero, temperaturas
+iguales al umbral, respuestas parciales y fallos de transporte. Tambien
+comprueban que analizar sin --enviar no haga peticiones y que un fallo de
+evaluacion no produzca reintentos automaticos. Hay regresiones de config y
+descargar junto con el nuevo analisis.
+
+Despues de compilar, se ejecutan en Linux con:
+
+~~~bash
+python3 pruebas/verificar_analisis.py
+~~~
+
+GitHub Actions ejecuta la compilacion con -Werror y estas pruebas en Ubuntu.
+
+## Validacion del analisis con el servidor
+
+El 24 de noviembre ejecute el informe local en Windows y despues lo envie
+una sola vez. El servidor confirmo los 24 campos y respondio
+intentos_restantes=9: el analisis quedo aceptado al primer intento.
+
+Las cuatro maquinas tienen 500 lecturas cada una. El informe suma 1931 validas
+y 69 descartadas; 114 lecturas validas superan el umbral de 74.23.
+
+La salida y la comprobacion de Linux estan en
+[la validacion del analisis](pruebas/validacion_analisis.md).

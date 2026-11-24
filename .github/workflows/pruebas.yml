@@ -1,0 +1,27 @@
+name: Compilacion y pruebas locales
+
+on:
+  push:
+    branches: [main, avance-analisis]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Instalar herramientas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make libcurl4-openssl-dev python3
+      - name: Compilar sin advertencias
+        run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -O2"
+      - name: Probar con el servidor local de pruebas
+        run: python3 pruebas/verificar_analisis.py

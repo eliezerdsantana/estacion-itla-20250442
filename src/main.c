@@ -12,9 +12,10 @@
 #include "red.h"
 #include "datos.h"
 #include "descarga.h"
+#include "analisis.h"
 
 /**
- * @brief Lee la orden y ejecuta config o descargar.
+ * @brief Lee la orden y ejecuta config, descargar o analizar.
  * @param argc Numero de elementos recibidos en la linea de comandos.
  * @param argv Nombre del programa y subcomando solicitado.
  * @return 0 si se completo la operacion; 1 ante un error.
@@ -28,11 +29,21 @@ int main(int argc, char *argv[]) {
     char respuesta[TAM_RESPUESTA];
     long codigo_http;
     int correcto;
+    int enviar_analisis;
 
-    if (argc != 2 || (strcmp(argv[1], "config") != 0 &&
-                     strcmp(argv[1], "descargar") != 0)) {
-        fputs("Uso: ./estacion config | descargar\n", stderr);
+    enviar_analisis = argc == 3 && strcmp(argv[1], "analizar") == 0 &&
+                      strcmp(argv[2], "--enviar") == 0;
+    if ((!enviar_analisis && argc != 2) ||
+        (strcmp(argv[1], "config") != 0 &&
+         strcmp(argv[1], "descargar") != 0 &&
+         strcmp(argv[1], "analizar") != 0)) {
+        fputs("Uso: ./estacion config | descargar | analizar [--enviar]\n",
+              stderr);
         return 1;
+    }
+    /* Consultar el informe local no necesita una conexion ni un token. */
+    if (strcmp(argv[1], "analizar") == 0 && !enviar_analisis) {
+        return analizar(NULL, matricula, 0) ? 0 : 1;
     }
     if (host == NULL || *host == '\0' ||
         matricula == NULL || *matricula == '\0' ||
@@ -43,6 +54,11 @@ int main(int argc, char *argv[]) {
     }
     if (!red_abrir(&conexion, host, token)) {
         return 1;
+    }
+    if (enviar_analisis) {
+        correcto = analizar(&conexion, matricula, 1);
+        red_cerrar(&conexion);
+        return correcto ? 0 : 1;
     }
     if (strcmp(argv[1], "descargar") == 0) {
         correcto = descargar(&conexion, matricula);

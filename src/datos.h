@@ -20,6 +20,20 @@ typedef struct {
     int tiene_ts, tiene_temp, tiene_corriente, tiene_vibracion;
 } LecturaPlanta;
 
+#define CANT_MAQUINAS 4
+
+typedef struct {
+    char maquina[3];
+    sqlite3_int64 validas, descartadas, sobre_umbral;
+    double temp_min, temp_max, temp_prom;
+    int tiene_temperaturas;
+} ResumenMaquina;
+
+/* Calcula los seis campos por maquina usando exclusivamente agregados SQL.
+ * Devuelve 1 si obtuvo los cuatro resultados; 0 ante un error de SQLite. */
+int datos_analizar(sqlite3 *base, double umbral,
+                    ResumenMaquina resumen[CANT_MAQUINAS]);
+
 /* Abre estacion.db, activa WAL y crea las tablas. Devuelve 1 si funciona. */
 int datos_abrir(sqlite3 **base);
 
