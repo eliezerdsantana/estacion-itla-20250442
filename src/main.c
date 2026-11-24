@@ -2,7 +2,8 @@
  * Programacion para Mecatronicos - ITLA
  * Autor: Eliezer Daniels Santana. Matricula: 2025-0442.
  * Seccion: Miercoles. Practica: Estacion de Telemetria ITLA.
- * Fecha: 23/11/2026. Repositorio: pendiente de publicar.
+ * Fecha: 23/11/2026. Actualizado: 24/11/2026.
+ * Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,9 +11,10 @@
 
 #include "red.h"
 #include "datos.h"
+#include "descarga.h"
 
 /**
- * @brief Ejecuta config para descargar, guardar y mostrar la configuracion.
+ * @brief Lee la orden y ejecuta config o descargar.
  * @param argc Numero de elementos recibidos en la linea de comandos.
  * @param argv Nombre del programa y subcomando solicitado.
  * @return 0 si se completo la operacion; 1 ante un error.
@@ -27,8 +29,9 @@ int main(int argc, char *argv[]) {
     long codigo_http;
     int correcto;
 
-    if (argc != 2 || strcmp(argv[1], "config") != 0) {
-        fputs("Uso: ./estacion config\n", stderr);
+    if (argc != 2 || (strcmp(argv[1], "config") != 0 &&
+                     strcmp(argv[1], "descargar") != 0)) {
+        fputs("Uso: ./estacion config | descargar\n", stderr);
         return 1;
     }
     if (host == NULL || *host == '\0' ||
@@ -40,6 +43,11 @@ int main(int argc, char *argv[]) {
     }
     if (!red_abrir(&conexion, host, token)) {
         return 1;
+    }
+    if (strcmp(argv[1], "descargar") == 0) {
+        correcto = descargar(&conexion, matricula);
+        red_cerrar(&conexion);
+        return correcto ? 0 : 1;
     }
     if (!red_get(&conexion, "/api/v1/config", respuesta,
                  sizeof(respuesta), &codigo_http)) {

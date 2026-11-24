@@ -2,7 +2,8 @@
  * Programacion para Mecatronicos - ITLA
  * Autor: Eliezer Daniels Santana. Matricula: 2025-0442.
  * Seccion: Miercoles. Practica: Estacion de Telemetria ITLA.
- * Fecha: 23/11/2026. Repositorio: pendiente de publicar.
+ * Fecha: 23/11/2026. Actualizado: 24/11/2026.
+ * Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
  */
 #include "datos.h"
 
@@ -224,6 +225,233 @@ int datos_mostrar_config(sqlite3 *base) {
     }
     if (sqlite3_finalize(sentencia) != SQLITE_OK) {
         fputs("No se pudo finalizar la consulta de config.\n", stderr);
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Finaliza una sentencia y deja su puntero en NULL.
+ * @param sentencia Direccion del puntero que se va a liberar.
+ * @return 1 si SQLite pudo finalizarla; 0 si indico un error.
+ */
+static int liberar_sentencia(sqlite3_stmt **sentencia) {
+    int resultado = sqlite3_finalize(*sentencia);
+    *sentencia = NULL;
+    if (resultado != SQLITE_OK) {
+        fputs("No se pudo finalizar una sentencia de SQLite.\n", stderr);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Consulta un valor de configuracion mediante una clave enlazada.
+ * @param base Base de datos abierta.
+ * @param clave Nombre de la opcion que se quiere consultar.
+ * @param valor Destino del texto, que queda terminado en cero.
+ * @param capacidad Espacio disponible en valor.
+ * @return 1 si se copio el valor; 0 si falta la opcion o hay un error.
+ */
+int datos_leer_config(sqlite3 *base, const char *clave, char *valor,
+                      size_t capacidad) {
+    sqlite3_stmt *sentencia = NULL;
+    const unsigned char *texto;
+    int bytes;
+    int correcto = 0;
+
+    if (capacidad == 0) {
+        return 0;
+    }
+    valor[0] = '\0';
+    if (sqlite3_prepare_v2(base, "SELECT valor FROM config WHERE clave=?;",
+                           -1, &sentencia, NULL) != SQLITE_OK ||
+        sqlite3_bind_text(sentencia, 1, clave, -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_step(sentencia) != SQLITE_ROW) {
+        fprintf(stderr, "No se pudo leer config.%s: %s\n", clave,
+                sqlite3_errmsg(base));
+        goto terminar_lectura;
+    }
+    texto = sqlite3_column_text(sentencia, 0);
+    bytes = sqlite3_column_bytes(sentencia, 0);
+    if (texto == NULL || bytes < 0 || (size_t)bytes >= capacidad) {
+        fputs("El valor de config no cabe en su destino.\n", stderr);
+        goto terminar_lectura;
+    }
+    memcpy(valor, texto, (size_t)bytes);
+    valor[bytes] = '\0';
+    correcto = 1;
+
+terminar_lectura:
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Prepara una descarga completa que reemplaza la copia local anterior.
+ * @param base Base de datos abierta.
+ * @param insercion Recibe la sentencia INSERT OR IGNORE reutilizable.
+ * @return 1 si la transaccion esta preparada; 0 si se revirtio el intento.
+ */
+int datos_preparar_descarga(sqlite3 *base, sqlite3_stmt **insercion) {
+    const char *sql =
+        "INSERT OR IGNORE INTO lecturas_planta "
+        "(id,maquina,ts,temp,corriente,vibracion,estado) VALUES (?,?,?,?,?,?,?);";
+
+    *insercion = NULL;
+    if (!ejecutar_sql(base, "BEGIN IMMEDIATE;")) {
+        return 0;
+    }
+    /* DELETE tambien pertenece a la transaccion: un fallo recupera la copia
+     * anterior. La clave primaria absorbe duplicados de las paginas nuevas. */
+    if (ejecutar_sql(base, "DELETE FROM lecturas_planta;") &&
+        sqlite3_prepare_v2(base, sql, -1, insercion, NULL) == SQLITE_OK) {
+        return 1;
+    }
+    fprintf(stderr, "No se pudo preparar la descarga: %s\n", sqlite3_errmsg(base));
+    if (!liberar_sentencia(insercion)) {
+        fputs("La sentencia de descarga no pudo liberarse.\n", stderr);
+    }
+    if (!ejecutar_sql(base, "ROLLBACK;")) {
+        fputs("No se pudo revertir la preparacion de la descarga.\n", stderr);
+    }
+    return 0;
+}
+
+/**
+ * @brief Enlaza un entero o NULL cuando el campo no estaba disponible.
+ * @param sentencia Sentencia preparada que recibira el valor.
+ * @param indice Posicion del parametro, comenzando en 1.
+ * @param existe Indica si el CSV contenia un entero interpretable.
+ * @param valor Numero convertido desde el CSV.
+ * @return 1 si el enlace funciono; 0 en caso contrario.
+ */
+static int enlazar_entero(sqlite3_stmt *sentencia, int indice, int existe,
+                           sqlite3_int64 valor) {
+    int resultado;
+    if (existe) {
+        resultado = sqlite3_bind_int64(sentencia, indice, valor);
+    } else {
+        resultado = sqlite3_bind_null(sentencia, indice);
+    }
+    return resultado == SQLITE_OK;
+}
+
+/**
+ * @brief Enlaza un real o NULL cuando el campo no estaba disponible.
+ * @param sentencia Sentencia preparada que recibira el valor.
+ * @param indice Posicion del parametro, comenzando en 1.
+ * @param existe Indica si el CSV contenia un real interpretable.
+ * @param valor Numero convertido desde el CSV.
+ * @return 1 si el enlace funciono; 0 en caso contrario.
+ */
+static int enlazar_real(sqlite3_stmt *sentencia, int indice, int existe,
+                        double valor) {
+    int resultado;
+    if (existe) {
+        resultado = sqlite3_bind_double(sentencia, indice, valor);
+    } else {
+        resultado = sqlite3_bind_null(sentencia, indice);
+    }
+    return resultado == SQLITE_OK;
+}
+
+/**
+ * @brief Guarda una lectura y conserva los campos ausentes como NULL.
+ * @param base Base de datos abierta, usada tambien para consultar los cambios.
+ * @param insercion INSERT OR IGNORE preparado al comenzar la descarga.
+ * @param lectura Datos de una fila del CSV.
+ * @param nueva Recibe 1 si se inserto una fila y 0 si su id ya existia.
+ * @return 1 si SQLite proceso la fila; 0 si hubo un error.
+ */
+int datos_insertar_lectura(sqlite3 *base, sqlite3_stmt *insercion,
+                          const LecturaPlanta *lectura, int *nueva) {
+    *nueva = 0;
+    if (sqlite3_bind_int64(insercion, 1, lectura->id) != SQLITE_OK ||
+        sqlite3_bind_text(insercion, 2, lectura->maquina, -1,
+                           SQLITE_TRANSIENT) != SQLITE_OK ||
+        !enlazar_entero(insercion, 3, lectura->tiene_ts, lectura->ts) ||
+        !enlazar_real(insercion, 4, lectura->tiene_temp, lectura->temp) ||
+        !enlazar_real(insercion, 5, lectura->tiene_corriente, lectura->corriente) ||
+        !enlazar_real(insercion, 6, lectura->tiene_vibracion, lectura->vibracion) ||
+        sqlite3_bind_text(insercion, 7, lectura->estado, -1,
+                           SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_step(insercion) != SQLITE_DONE) {
+        fprintf(stderr, "No se pudo insertar la lectura: %s\n", sqlite3_errmsg(base));
+        return 0;
+    }
+    *nueva = sqlite3_changes(base);
+    if (sqlite3_reset(insercion) != SQLITE_OK ||
+        sqlite3_clear_bindings(insercion) != SQLITE_OK) {
+        fprintf(stderr, "No se pudo reutilizar INSERT: %s\n", sqlite3_errmsg(base));
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Finaliza INSERT y confirma la instantanea completa.
+ * @param base Base de datos con la transaccion abierta.
+ * @param insercion Puntero de la sentencia que se va a liberar.
+ * @return 1 si se confirmo; 0 si fallo y se intento revertir.
+ */
+int datos_confirmar_descarga(sqlite3 *base, sqlite3_stmt **insercion) {
+    if (liberar_sentencia(insercion) && ejecutar_sql(base, "COMMIT;")) {
+        return 1;
+    }
+    if (!ejecutar_sql(base, "ROLLBACK;")) {
+        fputs("No se pudo revertir la descarga tras fallar COMMIT.\n", stderr);
+    }
+    return 0;
+}
+
+/**
+ * @brief Cancela una descarga para conservar la instantanea anterior.
+ * @param base Base con la transaccion abierta.
+ * @param insercion Sentencia de insercion que se va a liberar.
+ * @return 1 si se liberaron los recursos y se revirtio; 0 ante un error.
+ */
+int datos_cancelar_descarga(sqlite3 *base, sqlite3_stmt **insercion) {
+    int correcto = liberar_sentencia(insercion);
+    if (!ejecutar_sql(base, "ROLLBACK;")) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Cuenta las filas y suma sus IDs mediante una consulta SQL.
+ * @param base Base de datos con las lecturas recibidas.
+ * @param filas Recibe COUNT(*).
+ * @param suma_ids Recibe SUM(id), o 0 si la tabla esta vacia.
+ * @return 1 si se obtuvieron ambos resultados; 0 si SQLite indico un error.
+ */
+int datos_resumen_descarga(sqlite3 *base, sqlite3_int64 *filas,
+                           sqlite3_int64 *suma_ids) {
+    sqlite3_stmt *sentencia = NULL;
+    int correcto = 0;
+
+    *filas = 0;
+    *suma_ids = 0;
+    if (sqlite3_prepare_v2(base,
+            "SELECT COUNT(*),COALESCE(SUM(id),0) FROM lecturas_planta;",
+            -1, &sentencia, NULL) != SQLITE_OK ||
+        sqlite3_step(sentencia) != SQLITE_ROW) {
+        fprintf(stderr, "No se pudo calcular el resumen: %s\n", sqlite3_errmsg(base));
+        goto terminar_resumen;
+    }
+    *filas = sqlite3_column_int64(sentencia, 0);
+    *suma_ids = sqlite3_column_int64(sentencia, 1);
+    correcto = sqlite3_step(sentencia) == SQLITE_DONE;
+    if (!correcto) {
+        fprintf(stderr, "El resumen no termino correctamente: %s\n",
+                sqlite3_errmsg(base));
+    }
+
+terminar_resumen:
+    if (!liberar_sentencia(&sentencia)) {
         correcto = 0;
     }
     return correcto;
