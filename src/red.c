@@ -11,19 +11,19 @@
 #include "red.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#else
-#include <errno.h>
-#include <time.h>
 #endif
 
 typedef struct {
@@ -31,6 +31,15 @@ typedef struct {
     size_t capacidad;
     size_t usados;
 } Buffer;
+
+struct RedEnvio {
+    Conexion *conexion;
+    CURLM *multi;
+    int activo, completo;
+    Buffer buffer;
+    char json[512];
+    ResultadoEnvio resultado;
+};
 
 /**
  * @brief Copia los fragmentos que entrega libcurl al buffer de respuesta.
@@ -274,4 +283,245 @@ void red_cerrar(Conexion *conexion) {
         curl_global_cleanup();
     }
     memset(conexion, 0, sizeof(*conexion));
+}
+
+/**
+ * @brief Lee Retry-After sin suponer que las cabeceras terminan en cero.
+ * @param datos Linea completa entregada por libcurl.
+ * @param unidad Tamano de cada elemento recibido.
+ * @param cantidad Numero de elementos recibidos.
+ * @param usuario Estado del envio que recibe la espera indicada.
+ * @return Bytes procesados; 0 si el tamano no se puede representar.
+ */
+static size_t recibir_cabecera(char *datos, size_t unidad, size_t cantidad,
+                               void *usuario) {
+    RedEnvio *envio = usuario;
+    const char nombre[] = "retry-after:";
+    size_t n, i, inicio, fin;
+    char valor[128], *resto;
+    unsigned long segundos;
+    time_t fecha, ahora;
+
+    if (unidad != 0 && cantidad > SIZE_MAX / unidad) {
+        return 0;
+    }
+    n = unidad * cantidad;
+    /* Una nueva respuesta, por ejemplo tras un 100, reinicia sus cabeceras. */
+    if (n >= 5 && memcmp(datos, "HTTP/", 5) == 0) {
+        envio->resultado.tiene_retry_after = 0;
+    }
+    if (n < sizeof(nombre) - 1) {
+        return n;
+    }
+    for (i = 0; i < sizeof(nombre) - 1; i++) {
+        if (tolower((unsigned char)datos[i]) != nombre[i]) {
+            return n;
+        }
+    }
+    inicio = sizeof(nombre) - 1;
+    fin = n;
+    while (inicio < fin && isspace((unsigned char)datos[inicio])) {
+        inicio++;
+    }
+    while (fin > inicio && isspace((unsigned char)datos[fin - 1])) {
+        fin--;
+    }
+    if (fin == inicio || fin - inicio >= sizeof(valor)) {
+        return n;
+    }
+    memcpy(valor, datos + inicio, fin - inicio);
+    valor[fin - inicio] = '\0';
+    errno = 0;
+    segundos = strtoul(valor, &resto, 10);
+    if (isdigit((unsigned char)valor[0]) && *resto == '\0' && errno != ERANGE) {
+        envio->resultado.retry_after_s = (double)segundos;
+        envio->resultado.tiene_retry_after = 1;
+        return n;
+    }
+    fecha = curl_getdate(valor, NULL);
+    ahora = time(NULL);
+    if (fecha != (time_t)-1 && ahora != (time_t)-1) {
+        double diferencia = difftime(fecha, ahora);
+        envio->resultado.retry_after_s = diferencia > 0.0 ? diferencia : 0.0;
+        envio->resultado.tiene_retry_after = 1;
+    }
+    return n;
+}
+
+/**
+ * @brief Reserva la interfaz multi; la conexion sigue perteneciendo al llamador.
+ * @param conexion Conexion abierta, sin otra peticion HTTP en curso.
+ * @return Estado reservado, o NULL si no pudo prepararse.
+ */
+RedEnvio *red_envio_abrir(Conexion *conexion) {
+    RedEnvio *envio = calloc(1, sizeof(*envio));
+    if (envio == NULL) {
+        fputs("No hay memoria para preparar el envio.\n", stderr);
+        return NULL;
+    }
+    envio->conexion = conexion;
+    envio->multi = curl_multi_init();
+    if (envio->multi == NULL) {
+        free(envio);
+        fputs("No se pudo iniciar la interfaz multi.\n", stderr);
+        return NULL;
+    }
+    return envio;
+}
+
+/**
+ * @brief Prepara un POST cuyo texto permanece vivo hasta completar el envio.
+ * @param envio Estado reservado por red_envio_abrir.
+ * @param ruta Ruta HTTP de destino.
+ * @param json Cuerpo que se copia al estado, sin conservar punteros temporales.
+ * @return 1 si quedo preparada; 0 ante un error.
+ */
+int red_envio_iniciar(RedEnvio *envio, const char *ruta, const char *json) {
+    CURL *manejador = envio->conexion->manejador;
+    char url[512];
+    int n;
+
+    if (red_envio_ocupado(envio) || strlen(json) >= sizeof(envio->json)) {
+        fputs("El envio anterior sigue ocupado o el JSON no cabe.\n", stderr);
+        return 0;
+    }
+    n = snprintf(url, sizeof(url), "%s%s", envio->conexion->base_url, ruta);
+    if (n < 0 || (size_t)n >= sizeof(url)) {
+        return 0;
+    }
+    memcpy(envio->json, json, strlen(json) + 1);
+    memset(&envio->resultado, 0, sizeof(envio->resultado));
+    envio->buffer.texto = envio->resultado.texto;
+    envio->buffer.capacidad = sizeof(envio->resultado.texto);
+    envio->buffer.usados = 0;
+    if (curl_easy_setopt(manejador, CURLOPT_URL, url) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_WRITEFUNCTION, recibir) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_WRITEDATA, &envio->buffer) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_HEADERFUNCTION,
+                         recibir_cabecera) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_HEADERDATA, envio) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_HTTPHEADER,
+                         envio->conexion->cabeceras_json) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_POSTFIELDSIZE,
+                         (long)strlen(envio->json)) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_POSTFIELDS,
+                         envio->json) != CURLE_OK) {
+        fputs("No se pudo preparar el POST asincrono.\n", stderr);
+        return 0;
+    }
+    if (curl_multi_add_handle(envio->multi, manejador) != CURLM_OK) {
+        fputs("No se pudo agregar la peticion a multi.\n", stderr);
+        return 0;
+    }
+    envio->activo = 1;
+    return 1;
+}
+
+/**
+ * @brief Indica si queda una transferencia o un resultado sin recoger.
+ * @param envio Estado consultado.
+ * @return 1 si esta ocupado; 0 si puede iniciarse otra peticion.
+ */
+int red_envio_ocupado(const RedEnvio *envio) {
+    return envio->activo || envio->completo;
+}
+
+/**
+ * @brief Avanza la red con una espera corta, incluso cuando no hay conexiones.
+ * @param envio Estado que conserva el manejador HTTP reutilizable.
+ * @param espera_ms Espera maxima, entre 0 y 200 milisegundos.
+ * @return 1 si multi funciona; 0 si ocurre un fallo interno.
+ */
+int red_envio_avanzar(RedEnvio *envio, int espera_ms) {
+    int activos, pendientes;
+    CURLMsg *mensaje;
+    CURLMcode resultado;
+
+    if (espera_ms < 0 || espera_ms > 200) {
+        return 0;
+    }
+    resultado = curl_multi_perform(envio->multi, &activos);
+    if (resultado == CURLM_OK) {
+        resultado = curl_multi_poll(envio->multi, NULL, 0, espera_ms, NULL);
+    }
+    if (resultado == CURLM_OK) {
+        resultado = curl_multi_perform(envio->multi, &activos);
+    }
+    if (resultado != CURLM_OK) {
+        fprintf(stderr, "Fallo interno de multi: %s\n",
+                curl_multi_strerror(resultado));
+        return 0;
+    }
+    while ((mensaje = curl_multi_info_read(envio->multi, &pendientes)) != NULL) {
+        if (mensaje->msg == CURLMSG_DONE &&
+            mensaje->easy_handle == envio->conexion->manejador) {
+            CURLcode consulta = curl_easy_getinfo(mensaje->easy_handle,
+                CURLINFO_RESPONSE_CODE, &envio->resultado.codigo_http);
+            envio->resultado.transporte_correcto =
+                mensaje->data.result == CURLE_OK && consulta == CURLE_OK;
+            if (mensaje->data.result != CURLE_OK) {
+                fprintf(stderr, "Fallo de transferencia: %s\n",
+                        curl_easy_strerror(mensaje->data.result));
+            }
+            if (consulta != CURLE_OK) {
+                fputs("No se pudo leer el estado HTTP.\n", stderr);
+            }
+            if (curl_multi_remove_handle(envio->multi,
+                                         mensaje->easy_handle) != CURLM_OK) {
+                return 0;
+            }
+            envio->activo = 0;
+            envio->completo = 1;
+        }
+    }
+    return 1;
+}
+
+/**
+ * @brief Entrega una respuesta completada una sola vez.
+ * @param envio Estado de la red.
+ * @param resultado Recibe una copia del resultado.
+ * @return 1 si habia respuesta; 0 si la peticion no termino.
+ */
+int red_envio_recoger(RedEnvio *envio, ResultadoEnvio *resultado) {
+    if (!envio->completo) {
+        return 0;
+    }
+    *resultado = envio->resultado;
+    envio->completo = 0;
+    return 1;
+}
+
+/**
+ * @brief Cancela la transferencia pendiente y libera multi sin cerrar conexion.
+ * @param envio Estado que se libera; admite NULL.
+ * @return 1 si libero los recursos; 0 si libcurl indico un error.
+ */
+int red_envio_cerrar(RedEnvio *envio) {
+    CURL *manejador;
+    int correcto = 1;
+    if (envio == NULL) {
+        return 1;
+    }
+    manejador = envio->conexion->manejador;
+    if (envio->activo &&
+        curl_multi_remove_handle(envio->multi, manejador) != CURLM_OK) {
+        correcto = 0;
+    }
+    if (curl_multi_cleanup(envio->multi) != CURLM_OK) {
+        correcto = 0;
+    }
+    /* El easy no conserva punteros a los buffers que vamos a liberar. */
+    if (curl_easy_setopt(manejador, CURLOPT_HEADERDATA, NULL) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_HEADERFUNCTION, NULL) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_WRITEDATA, NULL) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_WRITEFUNCTION, NULL) != CURLE_OK ||
+        curl_easy_setopt(manejador, CURLOPT_POSTFIELDS, NULL) != CURLE_OK) {
+        correcto = 0;
+    }
+    free(envio);
+    if (!correcto) {
+        fputs("No se pudieron liberar todos los recursos de envio.\n", stderr);
+    }
+    return correcto;
 }

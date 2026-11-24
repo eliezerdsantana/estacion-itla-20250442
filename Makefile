@@ -13,7 +13,8 @@ else
     LDLIBS += -ldl -pthread
 endif
 
-OBJETOS = build/main.o build/red.o build/datos.o build/descarga.o build/analisis.o build/sqlite3.o
+OBJETOS = build/main.o build/red.o build/datos.o build/descarga.o build/analisis.o \
+          build/envio.o build/sensor.o build/tiempo.o build/sqlite3.o
 
 .PHONY: all run clean
 

@@ -540,3 +540,156 @@ terminar_analisis:
     }
     return correcto;
 }
+
+/**
+ * @brief Guarda antes de enviar; SQLite asigna la secuencia sin una carrera.
+ * @param base Base compartida con los otros subcomandos.
+ * @param ts Momento de la medicion, en segundos desde Epoch.
+ * @param temp Temperatura producida por el sensor.
+ * @param corriente Corriente producida por el sensor.
+ * @param seq Recibe la nueva secuencia persistente.
+ * @return 1 si la fila quedo guardada; 0 ante un error.
+ */
+int datos_guardar_telemetria(sqlite3 *base, sqlite3_int64 ts, double temp,
+                            double corriente, sqlite3_int64 *seq) {
+    const char *sql =
+        "INSERT INTO telemetria(seq,ts,temp,corriente,enviado,intentos)"
+        " SELECT COALESCE(MAX(seq),0)+1,?,?,?,0,0 FROM telemetria;";
+    sqlite3_stmt *sentencia = NULL;
+    int correcto = 0;
+
+    if (ts <= 0 || !isfinite(temp) || !isfinite(corriente)) {
+        fputs("La medicion no contiene valores validos.\n", stderr);
+        return 0;
+    }
+    if (sqlite3_prepare_v2(base, sql, -1, &sentencia, NULL) != SQLITE_OK ||
+        sqlite3_bind_int64(sentencia, 1, ts) != SQLITE_OK ||
+        sqlite3_bind_double(sentencia, 2, temp) != SQLITE_OK ||
+        sqlite3_bind_double(sentencia, 3, corriente) != SQLITE_OK ||
+        sqlite3_step(sentencia) != SQLITE_DONE || sqlite3_changes(base) != 1) {
+        fprintf(stderr, "No se pudo guardar la medicion: %s\n",
+                sqlite3_errmsg(base));
+        goto terminar_medicion;
+    }
+    *seq = sqlite3_last_insert_rowid(base);
+    correcto = 1;
+terminar_medicion:
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Consulta la pendiente mas antigua sin retirarla de la cola.
+ * @param base Base abierta.
+ * @param lectura Recibe los valores de la fila, si existe.
+ * @param existe Recibe 1 si habia una pendiente; 0 si la cola esta vacia.
+ * @return 1 si la consulta funciono; 0 ante un error.
+ */
+int datos_primera_pendiente(sqlite3 *base, Telemetria *lectura, int *existe) {
+    const char *sql =
+        "SELECT seq,ts,temp,corriente,intentos FROM telemetria"
+        " WHERE enviado=0 ORDER BY seq LIMIT 1;";
+    sqlite3_stmt *sentencia = NULL;
+    int paso, correcto = 0;
+
+    *existe = 0;
+    if (sqlite3_prepare_v2(base, sql, -1, &sentencia, NULL) != SQLITE_OK) {
+        goto terminar_pendiente;
+    }
+    paso = sqlite3_step(sentencia);
+    if (paso == SQLITE_ROW) {
+        lectura->seq = sqlite3_column_int64(sentencia, 0);
+        lectura->ts = sqlite3_column_int64(sentencia, 1);
+        lectura->temp = sqlite3_column_double(sentencia, 2);
+        lectura->corriente = sqlite3_column_double(sentencia, 3);
+        lectura->intentos = sqlite3_column_int64(sentencia, 4);
+        *existe = 1;
+        paso = sqlite3_step(sentencia);
+    }
+    correcto = paso == SQLITE_DONE;
+terminar_pendiente:
+    if (!correcto) {
+        fprintf(stderr, "No se pudo consultar la pendiente: %s\n",
+                sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Actualiza una fila mediante una instruccion fija y un seq enlazado.
+ * @param base Base abierta.
+ * @param sql UPDATE fijo del programa, con un solo parametro.
+ * @param seq Secuencia que se modifica.
+ * @return 1 si se actualizo exactamente una pendiente; 0 si fallo.
+ */
+static int actualizar_telemetria(sqlite3 *base, const char *sql,
+                                  sqlite3_int64 seq) {
+    sqlite3_stmt *sentencia = NULL;
+    int correcto = 0;
+    if (sqlite3_prepare_v2(base, sql, -1, &sentencia, NULL) == SQLITE_OK &&
+        sqlite3_bind_int64(sentencia, 1, seq) == SQLITE_OK &&
+        sqlite3_step(sentencia) == SQLITE_DONE && sqlite3_changes(base) == 1) {
+        correcto = 1;
+    }
+    if (!correcto) {
+        fprintf(stderr, "No se pudo actualizar seq=%lld: %s\n",
+                (long long)seq, sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Cuenta el intento antes de comenzar la transferencia.
+ * @param base Base abierta.
+ * @param seq Secuencia pendiente.
+ * @return 1 si quedo registrado; 0 ante un error.
+ */
+int datos_registrar_intento(sqlite3 *base, sqlite3_int64 seq) {
+    return actualizar_telemetria(base,
+        "UPDATE telemetria SET intentos=intentos+1 WHERE seq=? AND enviado=0;",
+        seq);
+}
+
+/**
+ * @brief Marca la lectura despues de recibir la confirmacion HTTP.
+ * @param base Base abierta.
+ * @param seq Secuencia que el servidor acepto.
+ * @return 1 si se marco; 0 ante un error.
+ */
+int datos_confirmar_telemetria(sqlite3 *base, sqlite3_int64 seq) {
+    return actualizar_telemetria(base,
+        "UPDATE telemetria SET enviado=1 WHERE seq=? AND enviado=0;", seq);
+}
+
+/**
+ * @brief Cuenta las pendientes mediante SQL.
+ * @param base Base abierta.
+ * @param cantidad Recibe el numero de filas sin confirmar.
+ * @return 1 si pudo contarlas; 0 ante un error.
+ */
+int datos_contar_pendientes(sqlite3 *base, sqlite3_int64 *cantidad) {
+    sqlite3_stmt *sentencia = NULL;
+    int correcto = 0;
+    if (sqlite3_prepare_v2(base,
+            "SELECT COUNT(*) FROM telemetria WHERE enviado=0;",
+            -1, &sentencia, NULL) == SQLITE_OK &&
+        sqlite3_step(sentencia) == SQLITE_ROW) {
+        *cantidad = sqlite3_column_int64(sentencia, 0);
+        correcto = sqlite3_step(sentencia) == SQLITE_DONE;
+    }
+    if (!correcto) {
+        fprintf(stderr, "No se pudo contar la cola: %s\n", sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}

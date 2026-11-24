@@ -2,7 +2,7 @@ name: Compilacion y pruebas locales
 
 on:
   push:
-    branches: [main, avance-analisis]
+    branches: [main, avance-analisis, avance-telemetria]
   pull_request:
 
 permissions:
@@ -25,3 +25,33 @@ jobs:
         run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -O2"
       - name: Probar con el servidor local de pruebas
         run: python3 pruebas/verificar_analisis.py
+      - name: Probar la cola y los reintentos de telemetria
+        run: python3 pruebas/verificar_envio.py
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Obtener el codigo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Preparar MSYS2 UCRT64
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
+      - name: Compilar sin advertencias en Windows
+        run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -O2"
+      - name: Probar los comandos anteriores en Windows
+        run: python pruebas/verificar_analisis.py
+      - name: Probar el arranque, la cola y los reintentos en Windows
+        run: python pruebas/verificar_envio.py
