@@ -375,7 +375,7 @@ int enviar(Conexion *conexion, const char *host, const char *matricula,
     }
     estado.red = red_envio_abrir(conexion);
     if (estado.red == NULL ||
-        !red_latido_preparar(estado.red, host, matricula, token) ||
+        !red_latido_preparar(estado.red, host, matricula, token, estado.latido_s) ||
         !datos_contar_pendientes(estado.base, &pendientes)) {
         goto terminar_envio;
     }

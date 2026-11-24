@@ -671,19 +671,34 @@ static int preparar_mqtt(CURL **destino, const char *host,
  * @param host Servidor del entorno.
  * @param matricula Usuario MQTT.
  * @param token Clave del entorno.
+ * @param periodo_s Periodo del latido, usado para limitar su tiempo en curso.
  * @return 1 si quedo preparado; 0 ante un error.
  */
 int red_latido_preparar(RedEnvio *envio, const char *host,
-                        const char *matricula, const char *token) {
+                        const char *matricula, const char *token,
+                        unsigned int periodo_s) {
     char topico[128];
-    int n = snprintf(topico, sizeof(topico),
-                      "itla/estudiantes/%s/latido", matricula);
-    if (n < 0 || (size_t)n >= sizeof(topico) ||
-        !preparar_mqtt(&envio->latido, host, matricula, token, topico, 5000L)) {
+    long limite_ms, conexion_ms;
+    int n;
+    if (periodo_s == 0) {
+        fputs("El periodo del latido debe ser positivo.\n", stderr);
         return 0;
     }
-    if (curl_easy_setopt(envio->latido, CURLOPT_FORBID_REUSE, 1L) != CURLE_OK) {
-        fputs("No se pudo configurar el cierre del latido.\n", stderr);
+    /* Cada intento dispone de hasta el 80% de su turno, con tope de 8 s.
+     * El margen restante permite recogerlo antes de preparar el siguiente.
+     * Comparar primero evita multiplicar periodos grandes fuera de long. */
+    limite_ms = periodo_s >= 10 ? 8000L : (long)periodo_s * 800L;
+    conexion_ms = limite_ms < 5000L ? limite_ms : 5000L;
+    n = snprintf(topico, sizeof(topico),
+                 "itla/estudiantes/%s/latido", matricula);
+    if (n < 0 || (size_t)n >= sizeof(topico) ||
+        !preparar_mqtt(&envio->latido, host, matricula, token, topico, limite_ms)) {
+        return 0;
+    }
+    if (curl_easy_setopt(envio->latido, CURLOPT_CONNECTTIMEOUT_MS,
+                         conexion_ms) != CURLE_OK ||
+        curl_easy_setopt(envio->latido, CURLOPT_FORBID_REUSE, 1L) != CURLE_OK) {
+        fputs("No se pudieron configurar los limites del latido.\n", stderr);
         return 0;
     }
     return 1;

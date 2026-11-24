@@ -41,7 +41,8 @@ int red_envio_cerrar(RedEnvio *envio);
 
 /* Publicacion MQTT QoS 0 independiente del HTTP, dentro del mismo multi. */
 int red_latido_preparar(RedEnvio *envio, const char *host,
-                        const char *matricula, const char *token);
+                        const char *matricula, const char *token,
+                        unsigned int periodo_s);
 int red_latido_ocupado(const RedEnvio *envio);
 int red_latido_iniciar(RedEnvio *envio, const char *texto);
 int red_latido_recoger(RedEnvio *envio, int *correcto);

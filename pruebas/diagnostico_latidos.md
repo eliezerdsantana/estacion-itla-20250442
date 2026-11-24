@@ -27,10 +27,16 @@ distinguir un fallo anterior a la conexion de uno en una fase posterior.
 Un valor cero debe interpretarse junto con los otros tiempos y el error.
 Si alguna consulta de tiempos falla, se informa tiempos_no_disponibles=1.
 
-La frecuencia procede de latido_s. Los fallos se descartan y el siguiente
-turno prepara los datos actuales. Los limites HTTP siguen siendo 3 segundos
-de conexion y 5 en total; la publicacion MQTT mantiene esos mismos limites
-durante esta comprobacion.
+La frecuencia procede de latido_s. Cada publicacion MQTT dispone de hasta
+el 80% de su periodo, con un maximo de 8 segundos. La conexion tiene un limite
+de 5 segundos o el plazo total si este es menor. Con un periodo de 10 segundos
+quedan 2 segundos de margen antes de preparar el siguiente latido.
+
+Esto permite terminar una respuesta MQTT demorada dentro de su turno. Si se
+agota el plazo, se descarta ese latido y el siguiente prepara los datos
+actuales. La cadencia sigue procediendo del periodo configurado.
+Las peticiones HTTP mantienen sus limites de 3 segundos para conectar y
+5 segundos en total, independientemente del presupuesto MQTT.
 
 ## Comprobacion breve en MSYS2 UCRT64
 
@@ -58,6 +64,10 @@ pruebas/verificar_latidos.py compara el contador de enviados con las
 publicaciones recibidas por su broker local y comprueba la suma del resumen.
 El caso de respuesta MQTT demorada comprueba que se informa el codigo 28,
 el tiempo total agotado y el tiempo de la conexion TCP que si se establecio.
+Otros dos casos configuran un periodo de diez segundos: una respuesta demorada
+seis segundos debe llegar en su turno; una demora de diez segundos debe vencer
+a los ocho, permitiendo publicar datos actuales en el siguiente turno.
+En ambos casos siguen generandose y enviandose las mediciones HTTP.
 Las pruebas de alarmas comprueban tambien el manejador multi compartido.
 
 Referencias: [tiempo total de libcurl](https://curl.se/libcurl/c/CURLINFO_TOTAL_TIME_T.html),
