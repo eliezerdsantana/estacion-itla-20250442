@@ -235,4 +235,15 @@ python3 pruebas/verificar_analisis.py
 ~~~
 
 GitHub Actions ejecuta la compilacion con -Werror y estas pruebas en Ubuntu.
-La validacion con el servidor del curso se registra aparte.
+
+## Validacion del analisis con el servidor
+
+El 24 de noviembre ejecute el informe local en Windows y despues lo envie
+una sola vez. El servidor confirmo los 24 campos y respondio
+intentos_restantes=9: el analisis quedo aceptado al primer intento.
+
+Las cuatro maquinas tienen 500 lecturas cada una. El informe suma 1931 validas
+y 69 descartadas; 114 lecturas validas superan el umbral de 74.23.
+
+La salida y la comprobacion de Linux estan en
+[la validacion del analisis](pruebas/validacion_analisis.md).
