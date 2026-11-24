@@ -309,13 +309,16 @@ class AlarmasITLA(unittest.TestCase):
         self.assertEqual([a[1] for a in self.ctx.acks], ['A1'])
 
     def test_10_trama_excesiva_o_nul_reconecta_y_recupera(self):
-        for invalida in (b'x' * 100 + b'\n', b'ALARMA;N\x00;M1;123\n'):
+        for numero, invalida in enumerate((b'x' * 100 + b'\n',
+                                          b'ALARMA;N\x00;M1;123\n'), 1):
             with self.subTest(invalida=invalida[:12]):
                 self.ctx.suscripciones.clear()
                 self.ctx.primera = [publicar(invalida)]
-                self.ctx.paquetes = [publicar(alarma('A1'))]
-                self.comprobar(self.ejecutar('escuchar', '--duracion', '3'), 1)
+                codigo = 'RECUPERADA' + str(numero)
+                self.ctx.paquetes = [publicar(alarma(codigo))]
+                self.comprobar(self.ejecutar('escuchar', '--duracion', '3'), numero)
                 self.assertGreaterEqual(len(self.ctx.suscripciones), 2)
+                self.assertEqual(self.ctx.acks[-1][1], codigo)
 
     def test_11_rafaga_mayor_de_4096_bytes_no_pierde_la_ultima(self):
         self.ctx.paquetes = [publicar('NINGUNA;1234567890\n')] * 130
