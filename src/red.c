@@ -438,6 +438,30 @@ int red_envio_ocupado(const RedEnvio *envio) {
 }
 
 /**
+ * @brief Muestra tiempos numericos del latido fallido sin imprimir credenciales.
+ * @param latido Manejador de la publicacion que acaba de terminar.
+ * @param fallo Error de transporte informado por libcurl.
+ * @return No devuelve un valor; un fallo al consultar tiempos no cambia el envio.
+ */
+static void mostrar_fallo_latido(CURL *latido, CURLcode fallo) {
+    curl_off_t total = 0, dns = 0, conexion = 0;
+    CURLcode r_total = curl_easy_getinfo(latido, CURLINFO_TOTAL_TIME_T, &total);
+    CURLcode r_dns = curl_easy_getinfo(latido, CURLINFO_NAMELOOKUP_TIME_T, &dns);
+    CURLcode r_conexion = curl_easy_getinfo(latido, CURLINFO_CONNECT_TIME_T,
+                                           &conexion);
+    fprintf(stderr, "Fallo de latido MQTT: %s (curl=%d",
+            curl_easy_strerror(fallo), (int)fallo);
+    if (r_total == CURLE_OK && r_dns == CURLE_OK && r_conexion == CURLE_OK) {
+        fprintf(stderr, " total_ms=%.3f dns_ms=%.3f conexion_ms=%.3f",
+                (double)total / 1000.0, (double)dns / 1000.0,
+                (double)conexion / 1000.0);
+    } else {
+        fputs(" tiempos_no_disponibles=1", stderr);
+    }
+    fputs(").\n", stderr);
+}
+
+/**
  * @brief Avanza la red con una espera corta, incluso cuando no hay conexiones.
  * @param envio Estado que conserva el manejador HTTP reutilizable.
  * @param espera_ms Espera maxima, entre 0 y 200 milisegundos.
@@ -486,6 +510,9 @@ int red_envio_avanzar(RedEnvio *envio, int espera_ms) {
         } else if (mensaje->msg == CURLMSG_DONE &&
                    mensaje->easy_handle == envio->latido) {
             CURLcode estado = mensaje->data.result;
+            if (estado != CURLE_OK) {
+                mostrar_fallo_latido(envio->latido, estado);
+            }
             if (curl_multi_remove_handle(envio->multi, envio->latido) != CURLM_OK) {
                 fputs("No se pudo retirar la publicacion MQTT.\n", stderr);
                 return 0;
@@ -493,10 +520,6 @@ int red_envio_avanzar(RedEnvio *envio, int espera_ms) {
             envio->latido_activo = 0;
             envio->latido_completo = 1;
             envio->latido_correcto = estado == CURLE_OK;
-            if (estado != CURLE_OK) {
-                fprintf(stderr, "Fallo de latido MQTT: %s\n",
-                        curl_easy_strerror(estado));
-            }
         } else if (mensaje->msg == CURLMSG_DONE &&
                    mensaje->easy_handle == envio->suscripcion) {
             CURLcode estado = mensaje->data.result;

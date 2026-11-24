@@ -10,3 +10,4 @@ estacion.exe
 *.zip
 __pycache__/
 *.pyc
+/diagnostico-latidos.log

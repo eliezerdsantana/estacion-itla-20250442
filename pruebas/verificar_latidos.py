@@ -1,6 +1,7 @@
 """Pruebas de MQTT junto con HTTP: no contactan el servidor del curso."""
 from contextlib import closing
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -60,8 +61,10 @@ class LatidosITLA(unittest.TestCase):
                               'FROM telemetria ORDER BY seq').fetchall()
 
     def ejecutar(self, *args):
+        mqtt_antes = len(self.ctx.mqtt_mensajes)
         r = subprocess.run([str(EXE), *args], cwd=self.carpeta, env=self.env,
                            capture_output=True, text=True, timeout=20)
+        r.mqtt_antes = mqtt_antes
         self.assertNotIn(TOKEN, r.stdout + r.stderr)
         return r
 
@@ -70,6 +73,15 @@ class LatidosITLA(unittest.TestCase):
         self.assertEqual(len(self.filas()), cantidad)
         self.assertEqual(self.ctx.errores, [])
         self.assertEqual(self.ctx.mqtt_errores, [])
+        resumen = re.search(r'Resumen de latidos: turnos=(\d+) enviados=(\d+) '
+                            r'descartados=(\d+) omitidos=(\d+) sin_resultado=(\d+)',
+                            resultado.stdout)
+        self.assertIsNotNone(resumen, resultado.stdout)
+        turnos, enviados, descartados, omitidos, sin_resultado = map(
+            int, resumen.groups())
+        self.assertEqual(turnos, enviados + descartados + omitidos + sin_resultado)
+        # El broker independiente comprueba las publicaciones que recibio.
+        self.assertEqual(enviados, len(self.ctx.mqtt_mensajes) - resultado.mqtt_antes)
 
     def cargas(self):
         salida = []
@@ -151,6 +163,15 @@ class LatidosITLA(unittest.TestCase):
         self.assertEqual(len({c[0] for c in cargas}), len(cargas))
         self.assertTrue(all(f[4] == 1 for f in self.filas()))
         self.assertIn('Latido MQTT descartado:', r.stdout)
+        tiempos = re.search(r'curl=28 total_ms=([\d.]+) dns_ms=([\d.]+) '
+                            r'conexion_ms=([\d.]+)', r.stderr)
+        self.assertIsNotNone(tiempos, r.stderr)
+        total, dns, conexion = map(float, tiempos.groups())
+        # El TCP local ya estaba abierto: fue la respuesta MQTT la que se demoro.
+        self.assertGreaterEqual(total, 4800)
+        self.assertGreater(conexion, 0)
+        self.assertGreater(total, conexion)
+        self.assertGreaterEqual(dns, 0)
 
     def test_07_broker_corta_y_siguiente_latido_lleva_datos_nuevos(self):
         self.ctx.mqtt_modo = 'cortar_primera'

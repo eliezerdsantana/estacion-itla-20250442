@@ -25,6 +25,8 @@ typedef struct {
     Sensor sensor;
     sqlite3_int64 seq_en_curso, seq_ultima, seq_latido, pendientes_latido;
     unsigned int intervalo_s, latido_s, retroceso_s;
+    unsigned int latidos_turnos, latidos_enviados, latidos_descartados;
+    unsigned int latidos_omitidos;
     double inicio, proxima_lectura, proximo_envio, proximo_latido;
 } EstadoEnvio;
 
@@ -227,6 +229,11 @@ static int procesar_respuesta(EstadoEnvio *estado, double ahora) {
 static void recoger_latido(EstadoEnvio *estado) {
     int correcto;
     if (red_latido_recoger(estado->red, &correcto)) {
+        if (correcto) {
+            estado->latidos_enviados++;
+        } else {
+            estado->latidos_descartados++;
+        }
         printf("Latido MQTT %s: seq=%lld pendientes=%lld\n",
                correcto ? "enviado" : "descartado",
                (long long)estado->seq_latido,
@@ -248,11 +255,13 @@ static int programar_latido(EstadoEnvio *estado, double ahora) {
     if (ahora < estado->proximo_latido) {
         return 1;
     }
+    estado->latidos_turnos++;
     estado->proximo_latido += estado->latido_s;
     if (estado->proximo_latido <= ahora) {
         estado->proximo_latido = ahora + estado->latido_s;
     }
     if (red_latido_ocupado(estado->red)) {
+        estado->latidos_omitidos++;
         puts("Latido omitido: la publicacion anterior sigue en curso.");
         return 1;
     }
@@ -261,6 +270,7 @@ static int programar_latido(EstadoEnvio *estado, double ahora) {
     }
     ts = time(NULL);
     if (ts == (time_t)-1) {
+        estado->latidos_descartados++;
         fputs("No se pudo leer la fecha del latido; se descarta.\n", stderr);
         return 1;
     }
@@ -268,12 +278,15 @@ static int programar_latido(EstadoEnvio *estado, double ahora) {
                  (long long)estado->seq_ultima, (long long)pendientes,
                  (long long)ts);
     if (n < 0 || (size_t)n >= sizeof(texto)) {
+        estado->latidos_descartados++;
         fputs("El latido no cabe; se descarta.\n", stderr);
         return 1;
     }
     if (red_latido_iniciar(estado->red, texto)) {
         estado->seq_latido = estado->seq_ultima;
         estado->pendientes_latido = pendientes;
+    } else {
+        estado->latidos_descartados++;
     }
     return 1;
 }
@@ -375,6 +388,12 @@ int enviar(Conexion *conexion, const char *host, const char *matricula,
            "Ctrl+C para detener.\n", estado.intervalo_s, estado.latido_s,
            (long long)pendientes);
     correcto = ejecutar_bucle(&estado, duracion_s);
+    printf("Resumen de latidos: turnos=%u enviados=%u descartados=%u "
+           "omitidos=%u sin_resultado=%u\n", estado.latidos_turnos,
+           estado.latidos_enviados, estado.latidos_descartados,
+           estado.latidos_omitidos, estado.latidos_turnos -
+           estado.latidos_enviados - estado.latidos_descartados -
+           estado.latidos_omitidos);
 
 terminar_envio:
     if (!red_envio_cerrar(estado.red)) {
