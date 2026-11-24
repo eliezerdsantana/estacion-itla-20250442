@@ -5,7 +5,7 @@ Programacion para Mecatronicos, seccion de los miercoles.
 
 ## Avance actual
 
-Ya estan implementados `config`, `descargar` y `analizar`.
+Ya estan implementados `config`, `descargar`, `analizar` y `enviar`.
 
 `config` pide la configuracion al servidor, comprueba la respuesta HTTP y guarda
 los siete campos en SQLite. Despues imprime los valores consultados de la base.
@@ -14,9 +14,11 @@ los siete campos en SQLite. Despues imprime los valores consultados de la base.
 el numero de filas y la suma de IDs con SQL. Envia esos resultados al servidor
 y comprueba que la respuesta contenga la linea `correcto=1`.
 
-Quedan pendientes `enviar` y `escuchar`, junto con el modulo del sensor y las
-pruebas de los niveles siguientes. El analisis se comprueba primero de forma
-local antes de solicitar su evaluacion.
+El analisis ya fue aceptado por el servidor del curso. El avance de enviar
+incluye sensor simulado, cola persistente y reintentos; se comprueba primero
+con una ejecucion corta en Windows.
+
+Quedan pendientes los latidos MQTT, escuchar y la sesion completa de evaluacion.
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
@@ -30,6 +32,10 @@ Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 - `lib/sqlite/sqlite3.c` y `sqlite3.h`: archivos originales de SQLite 3.54.1.
 - `Makefile`: compila el programa y SQLite por separado.
 - `plan.md`: checklist del trabajo y del avance probado.
+- `src/envio.c` y `src/envio.h`: alternan el muestreo y el envio de la cola.
+- `src/sensor.c` y `src/sensor.h`: generan las mediciones simuladas.
+- `src/tiempo.c` y `src/tiempo.h`: reloj monotono de Linux y Windows.
+- `pruebas/verificar_envio.py`: pruebas de persistencia, reintentos y cierre.
 
 Los archivos originales de SQLite se copian de `sqlite-amalgamation-3540100.zip`
 en la [pagina oficial](https://www.sqlite.org/download.html).
@@ -247,3 +253,78 @@ y 69 descartadas; 114 lecturas validas superan el umbral de 74.23.
 
 La salida y la comprobacion de Linux estan en
 [la validacion del analisis](pruebas/validacion_analisis.md).
+
+## Envio de mediciones
+
+Una lectura propia contiene seq, ts, temp y corriente. seq es el numero de
+medicion y ts indica cuando se tomo; son datos distintos. El sensor simulado
+produce temperatura de 25 a 45 C con una onda lenta mas ruido y corriente
+de 2 a 5 A.
+
+Primero se guarda cada medicion en la tabla telemetria con enviado=0. La
+sentencia SQL asigna MAX(seq)+1; la numeracion continua al reiniciar porque
+las filas permanecen en SQLite. Despues se consulta la pendiente con menor seq
+y se intenta entregarla a POST /api/v1/telemetria.
+
+La fila solo se marca enviado=1 cuando llega HTTP 201 con estado=creada o
+HTTP 200 con estado=duplicada. Si el servidor recibio la fila y se perdio la
+respuesta, el siguiente intento usa la misma secuencia y el mismo timestamp.
+La confirmacion de duplicada permite terminar ese envio sin crear otra fila.
+
+Para una primera comprobacion corta:
+
+~~~bash
+make run ARGS="enviar --duracion 30"
+~~~
+
+Con el intervalo de 5 segundos se generan normalmente seis lecturas durante
+esos 30 segundos. El comando termina por si mismo y conserva las pendientes.
+Tambien se puede ejecutar sin limite:
+
+~~~bash
+make run ARGS=enviar
+~~~
+
+Ctrl+C solicita el cierre. El manejador de la senal solo marca una variable;
+el bucle sale, cierra la red y conserva las lecturas que falten por confirmar.
+
+## Esperas y recuperacion de la cola
+
+La interfaz multi de libcurl permite avanzar el HTTP sin bloquear la tarea
+que genera mediciones. El bucle usa esperas de hasta 100 ms, mientras cada
+peticion mantiene sus limites de 3 segundos para conectar y 5 en total.
+
+Ante HTTP 503 o 429 se respeta Retry-After, tanto en segundos como con una
+fecha HTTP. Mientras vence ese plazo siguen guardandose las nuevas lecturas.
+Ante errores de transporte o respuestas transitorias sin plazo se espera
+1, 2, 4, 8, 16 y hasta 30 segundos. Una confirmacion reinicia esa espera.
+Entre envios aceptados hay una pausa de al menos 250 ms para respetar el ritmo.
+
+Las filas se mantienen aunque se cierre el programa. Al volver a ejecutarlo
+se consultan otra vez las pendientes por orden de seq. No se inventan
+mediciones correspondientes al tiempo en que el equipo estuvo suspendido.
+Un error persistente de acceso o datos, como HTTP 401 o 400, termina con
+un mensaje y mantiene la cola para corregir el problema.
+
+El reloj monotono organiza los intervalos y los reintentos. Los timestamps
+guardados usan la fecha del sistema en segundos desde Epoch.
+
+## Pruebas del envio
+
+Se comprobaron 17 casos locales: guardado anterior al POST, dos caidas con
+Retry-After, recuperacion ordenada, respuesta perdida y confirmacion duplicada,
+reintentos de 1/2/4 segundos, HTTP 429, Retry-After con fecha, cabeceras
+interinas, reinicio, Ctrl+C durante una respuesta lenta, respuesta excesiva,
+secuencias de 64 bits, configuracion invalida y limites del sensor.
+
+~~~bash
+python3 pruebas/verificar_analisis.py
+python3 pruebas/verificar_envio.py
+~~~
+
+Las 19 comprobaciones anteriores tambien siguen pasando. Estas pruebas solo
+usan 127.0.0.1, bases temporales y una credencial aleatoria de prueba.
+
+Este avance todavia no publica latidos ni recibe alarmas. La prueba corta
+comprueba el funcionamiento inicial; la evaluacion de los niveles 3 a 5
+requiere la sesion continua de 15 minutos o mas con todos esos componentes.

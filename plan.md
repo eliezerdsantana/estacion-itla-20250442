@@ -39,6 +39,12 @@ La evidencia esta en pruebas/validacion_analisis.md.
 El siguiente avance es guardar cada lectura propia antes de intentar enviarla
 y recuperar las pendientes cuando vuelva a funcionar la conexion.
 
+La cola y los reintentos estan preparados en avance-telemetria. Compilaron
+en Linux sin advertencias y pasaron 17 casos nuevos, ademas de los 19
+anteriores. La casilla sigue pendiente hasta la prueba corta en Windows
+y la incorporacion del avance probado a main. Los latidos y las alarmas
+se añaden despues, antes de iniciar la sesion completa de evaluacion.
+
 ## Metodo de estudio
 
 Primero describo la intencion en español. Despues leo como se expresa en C,

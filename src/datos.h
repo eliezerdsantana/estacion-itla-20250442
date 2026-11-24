@@ -29,6 +29,19 @@ typedef struct {
     int tiene_temperaturas;
 } ResumenMaquina;
 
+typedef struct {
+    sqlite3_int64 seq, ts, intentos;
+    double temp, corriente;
+} Telemetria;
+
+/* Conserva primero la medicion y asigna MAX(seq)+1 de forma atomica. */
+int datos_guardar_telemetria(sqlite3 *base, sqlite3_int64 ts, double temp,
+                            double corriente, sqlite3_int64 *seq);
+int datos_primera_pendiente(sqlite3 *base, Telemetria *lectura, int *existe);
+int datos_registrar_intento(sqlite3 *base, sqlite3_int64 seq);
+int datos_confirmar_telemetria(sqlite3 *base, sqlite3_int64 seq);
+int datos_contar_pendientes(sqlite3 *base, sqlite3_int64 *cantidad);
+
 /* Calcula los seis campos por maquina usando exclusivamente agregados SQL.
  * Devuelve 1 si obtuvo los cuatro resultados; 0 ante un error de SQLite. */
 int datos_analizar(sqlite3 *base, double umbral,

@@ -20,6 +20,24 @@ typedef struct {
     int inicializada;
 } Conexion;
 
+typedef struct RedEnvio RedEnvio;
+
+typedef struct {
+    int transporte_correcto;
+    long codigo_http;
+    int tiene_retry_after;
+    double retry_after_s;
+    char texto[512];
+} ResultadoEnvio;
+
+/* Usa el manejador HTTP de conexion sin bloquear la generacion de lecturas. */
+RedEnvio *red_envio_abrir(Conexion *conexion);
+int red_envio_iniciar(RedEnvio *envio, const char *ruta, const char *json);
+int red_envio_ocupado(const RedEnvio *envio);
+int red_envio_avanzar(RedEnvio *envio, int espera_ms);
+int red_envio_recoger(RedEnvio *envio, ResultadoEnvio *resultado);
+int red_envio_cerrar(RedEnvio *envio);
+
 /* Abre la conexion HTTP usando el host y el token; devuelve 1 si funciona. */
 int red_abrir(Conexion *conexion, const char *host, const char *token);
 

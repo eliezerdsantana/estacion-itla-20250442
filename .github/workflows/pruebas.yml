@@ -2,7 +2,7 @@ name: Compilacion y pruebas locales
 
 on:
   push:
-    branches: [main, avance-analisis]
+    branches: [main, avance-analisis, avance-telemetria]
   pull_request:
 
 permissions:
@@ -25,3 +25,5 @@ jobs:
         run: make CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -O2"
       - name: Probar con el servidor local de pruebas
         run: python3 pruebas/verificar_analisis.py
+      - name: Probar la cola y los reintentos de telemetria
+        run: python3 pruebas/verificar_envio.py
