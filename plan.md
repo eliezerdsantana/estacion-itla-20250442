@@ -18,7 +18,7 @@ Santo Domingo. Clase: miercoles 25 a las 18:00.
 - [x] Recuperar la sesion y comprobar config.
 - [x] Implementar, probar y subir descargar. Commit 71884a1.
 - [x] Implementar, probar y subir analizar. Servidor: 24/24 al primer intento.
-- [ ] Preparar la cola de telemetria y sus reintentos.
+- [x] Preparar la cola de telemetria y sus reintentos. Windows: 6/6 confirmadas.
 - [ ] Añadir los latidos MQTT.
 - [ ] Añadir la recepcion y confirmacion de alarmas.
 - [ ] Probar la sesion completa y guardar sus resultados.
@@ -36,14 +36,15 @@ curso confirmo los 24 campos en el primer intento, con intentos_restantes=9.
 Las cuatro maquinas suman 1931 lecturas validas y 69 descartadas.
 La evidencia esta en pruebas/validacion_analisis.md.
 
-El siguiente avance es guardar cada lectura propia antes de intentar enviarla
-y recuperar las pendientes cuando vuelva a funcionar la conexion.
+La cola y los reintentos del codigo a2a2722 ya se comprobaron. Las pruebas
+automaticas pasaron en Linux y Windows. En el equipo, una ejecucion de
+30 segundos guardo y envio seq=1 a seq=6; las seis recibieron HTTP 201
+y el proceso termino sin pendientes.
+La evidencia esta en pruebas/validacion_envio_inicial.md.
 
-La cola y los reintentos estan preparados en avance-telemetria. Compilaron
-en Linux sin advertencias y pasaron 17 casos nuevos, ademas de los 19
-anteriores. La casilla sigue pendiente hasta la prueba corta en Windows
-y la incorporacion del avance probado a main. Los latidos y las alarmas
-se añaden despues, antes de iniciar la sesion completa de evaluacion.
+El siguiente avance son los latidos MQTT, para que el servidor sepa que
+la estacion sigue funcionando. Despues se añaden las alarmas y se prueba
+la sesion completa, incluidas las caidas programadas del servidor del curso.
 
 ## Metodo de estudio
 

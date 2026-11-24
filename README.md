@@ -15,8 +15,8 @@ el numero de filas y la suma de IDs con SQL. Envia esos resultados al servidor
 y comprueba que la respuesta contenga la linea `correcto=1`.
 
 El analisis ya fue aceptado por el servidor del curso. El avance de enviar
-incluye sensor simulado, cola persistente y reintentos; se comprueba primero
-con una ejecucion corta en Windows.
+incluye sensor simulado, cola persistente y reintentos. La prueba corta en
+Windows confirmo las seis lecturas generadas, con cero pendientes al terminar.
 
 Quedan pendientes los latidos MQTT, escuchar y la sesion completa de evaluacion.
 
@@ -328,6 +328,11 @@ usan 127.0.0.1, bases temporales y una credencial aleatoria de prueba.
 Este avance todavia no publica latidos ni recibe alarmas. La prueba corta
 comprueba el funcionamiento inicial; la evaluacion de los niveles 3 a 5
 requiere la sesion continua de 15 minutos o mas con todos esos componentes.
+
+El 24 de noviembre ejecute enviar durante 30 segundos en Windows. Las seis
+mediciones se guardaron y el servidor del curso confirmo todas con HTTP 201.
+El cierre automatico termino con pendientes=0. La salida completa esta en
+[la validacion inicial del envio](pruebas/validacion_envio_inicial.md).
 
 ## Compatibilidad del arranque en Windows
 
