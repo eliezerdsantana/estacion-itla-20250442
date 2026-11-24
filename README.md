@@ -328,3 +328,19 @@ usan 127.0.0.1, bases temporales y una credencial aleatoria de prueba.
 Este avance todavia no publica latidos ni recibe alarmas. La prueba corta
 comprueba el funcionamiento inicial; la evaluacion de los niveles 3 a 5
 requiere la sesion continua de 15 minutos o mas con todos esos componentes.
+
+## Compatibilidad del arranque en Windows
+
+La primera comprobacion en Windows encontro una salida silenciosa con codigo
+1 antes de iniciar la telemetria. La llamada setvbuf usaba _IOLBF con un
+tamano de cero, que no es valido para ese modo en el runtime de Windows.
+
+La salida usa ahora _IONBF, que muestra los mensajes inmediatamente sin
+necesitar un buffer. Los errores al preparar la salida o los manejadores de
+senales tambien muestran un diagnostico antes de terminar.
+
+La comprobacion automatica añade Windows con MSYS2 UCRT64, ademas de Linux.
+Los servidores locales de prueba cierran explicitamente sus conexiones
+SQLite para que Windows pueda liberar los archivos temporales.
+
+[Referencia de setvbuf de Microsoft](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setvbuf)

@@ -1,5 +1,6 @@
 """Pruebas locales con datos inventados: nunca contactan el servidor del curso."""
 import csv
+from contextlib import closing
 import io
 import json
 import math
@@ -220,13 +221,13 @@ class AnalisisITLA(unittest.TestCase):
                               capture_output=True, text=True, timeout=12)
 
     def guardar_filas(self, filas):
-        with sqlite3.connect(self.carpeta / "estacion.db") as db:
+        with closing(sqlite3.connect(self.carpeta / "estacion.db")) as db, db:
             db.execute("DELETE FROM lecturas_planta")
             db.executemany("INSERT INTO lecturas_planta VALUES (?,?,?,?,?,?,?)",
                            filas)
 
     def config(self, clave, valor):
-        with sqlite3.connect(self.carpeta / "estacion.db") as db:
+        with closing(sqlite3.connect(self.carpeta / "estacion.db")) as db, db:
             db.execute("UPDATE config SET valor=? WHERE clave=?", (valor, clave))
 
     def comprobar_tabla(self, resultado, filas=None, umbral=UMBRAL):
@@ -330,7 +331,7 @@ class AnalisisITLA(unittest.TestCase):
         self.no_enviada(self.ejecutar("analizar", "--enviar"))
 
     def test_error_sql_no_envia(self):
-        with sqlite3.connect(self.carpeta / "estacion.db") as db:
+        with closing(sqlite3.connect(self.carpeta / "estacion.db")) as db, db:
             db.execute("ALTER TABLE lecturas_planta "
                        "RENAME COLUMN vibracion TO ausente")
         self.no_enviada(self.ejecutar("analizar", "--enviar"))
@@ -355,7 +356,7 @@ class AnalisisITLA(unittest.TestCase):
         resultado = self.ejecutar("descargar")
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
         self.assertIn("correcto=1", resultado.stdout)
-        with sqlite3.connect(self.carpeta / "estacion.db") as db:
+        with closing(sqlite3.connect(self.carpeta / "estacion.db")) as db, db:
             filas = db.execute(
                 "SELECT COUNT(*),SUM(id) FROM lecturas_planta").fetchone()
         self.assertEqual(filas, (2000, sum(f[0] for f in self.filas)))

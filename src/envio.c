@@ -253,16 +253,21 @@ int enviar(Conexion *conexion, const char *matricula, unsigned int duracion_s) {
     sqlite3_int64 pendientes;
     int correcto = 0;
 
-    if (setvbuf(stdout, NULL, _IOLBF, 0) != 0) {
+    /* En Windows, _IOLBF con tamano 0 es invalido. _IONBF muestra cada
+     * mensaje inmediatamente y no necesita reservar un buffer. */
+    if (setvbuf(stdout, NULL, _IONBF, 0) != 0) {
+        perror("No se pudo configurar la salida de telemetria");
         return 0;
     }
     detener = 0;
     anterior_int = signal(SIGINT, pedir_salida);
     if (anterior_int == SIG_ERR) {
+        perror("No se pudo preparar el manejo de Ctrl+C");
         return 0;
     }
     anterior_term = signal(SIGTERM, pedir_salida);
     if (anterior_term == SIG_ERR) {
+        perror("No se pudo preparar el manejo de SIGTERM");
         if (signal(SIGINT, anterior_int) == SIG_ERR) {
             fputs("No se pudo restaurar SIGINT.\n", stderr);
         }
@@ -301,9 +306,12 @@ terminar_envio:
     if (!datos_cerrar(estado.base)) {
         correcto = 0;
     }
-    if (signal(SIGINT, anterior_int) == SIG_ERR ||
-        signal(SIGTERM, anterior_term) == SIG_ERR) {
-        fputs("No se pudieron restaurar las senales.\n", stderr);
+    if (signal(SIGINT, anterior_int) == SIG_ERR) {
+        perror("No se pudo restaurar SIGINT");
+        correcto = 0;
+    }
+    if (signal(SIGTERM, anterior_term) == SIG_ERR) {
+        perror("No se pudo restaurar SIGTERM");
         correcto = 0;
     }
     return correcto;

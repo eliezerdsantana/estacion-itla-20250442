@@ -1,5 +1,6 @@
 """Pruebas locales de la cola: no usan el token ni el servidor del curso."""
 import json
+from contextlib import closing
 import math
 import os
 from pathlib import Path
@@ -75,7 +76,7 @@ class Servidor(BaseHTTPRequestHandler):
             ctx.errores.append('Ruta incorrecta')
             self.responder(404, 'error=ruta\n')
             return
-        with sqlite3.connect(ctx.carpeta / 'estacion.db') as db:
+        with closing(sqlite3.connect(ctx.carpeta / 'estacion.db')) as db, db:
             fila = db.execute('SELECT ts,temp,corriente,enviado,intentos '
                               'FROM telemetria WHERE seq=?', (seq,)).fetchone()
         if (set(cuerpo) != {'seq', 'ts', 'temp', 'corriente'} or fila is None or
@@ -159,12 +160,12 @@ class EnvioITLA(unittest.TestCase):
         return r
 
     def filas(self):
-        with sqlite3.connect(self.carpeta / 'estacion.db') as db:
+        with closing(sqlite3.connect(self.carpeta / 'estacion.db')) as db, db:
             return db.execute('SELECT seq,ts,temp,corriente,enviado,intentos '
                               'FROM telemetria ORDER BY seq').fetchall()
 
     def config(self, clave, valor):
-        with sqlite3.connect(self.carpeta / 'estacion.db') as db:
+        with closing(sqlite3.connect(self.carpeta / 'estacion.db')) as db, db:
             db.execute('UPDATE config SET valor=? WHERE clave=?', (valor, clave))
 
     def comprobar_correcto(self, resultado):
@@ -300,7 +301,7 @@ class EnvioITLA(unittest.TestCase):
         self.assertEqual(self.filas()[0][5], 2)
 
     def test_13_cola_antigua_se_envia_en_orden_y_con_pausa(self):
-        with sqlite3.connect(self.carpeta / 'estacion.db') as db:
+        with closing(sqlite3.connect(self.carpeta / 'estacion.db')) as db, db:
             db.executemany('INSERT INTO telemetria VALUES (?,?,?,?,0,0)',
                            [(i, int(time.time())-45, 30.5, 3.2)
                             for i in range(1,21)])
@@ -314,7 +315,7 @@ class EnvioITLA(unittest.TestCase):
         self.assertTrue(all(e[1]-e[2]['ts'] >= 30 for e in eventos))
 
     def test_14_seq_supera_el_limite_de_32_bits(self):
-        with sqlite3.connect(self.carpeta / 'estacion.db') as db:
+        with closing(sqlite3.connect(self.carpeta / 'estacion.db')) as db, db:
             db.execute('INSERT INTO telemetria VALUES (?,?,?,?,1,1)',
                        (2147483648, int(time.time())-10, 30.0, 3.0))
         r = self.ejecutar('enviar', '--duracion', '2')
