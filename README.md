@@ -18,9 +18,10 @@ El analisis ya fue aceptado por el servidor del curso. El avance de enviar
 incluye sensor simulado, cola persistente y reintentos. La prueba corta en
 Windows confirmo las seis lecturas generadas, con cero pendientes al terminar.
 
-El envio ya incluye los latidos MQTT; el servidor confirmo nivel4=10/10.
-La recepcion de alarmas esta preparada para su comprobacion en el equipo.
-Queda pendiente la sesion completa de evaluacion de telemetria y alarmas.
+El envio incluye latidos MQTT y escuchar recibe, guarda y confirma las alarmas.
+La comprobacion final del 24 de noviembre alcanzo 70/70 puntos automaticos.
+La revision del codigo y la defensa corresponden a la evaluacion del profesor.
+La respuesta completa esta en [la validacion final](pruebas/validacion_final.md).
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
@@ -383,6 +384,11 @@ usa la secuencia, pendientes y fecha actuales. No se guardan latidos en la
 cola de SQLite ni se reenvian los que se perdieron. Si una publicacion
 sigue activa cuando toca otra, se omite ese turno.
 
+Cada publicacion dispone de hasta el 80% de su periodo, con un maximo de
+8 segundos. Puede usar hasta 5 segundos para conectar, limitado tambien por
+ese plazo total. Con latido_s=10 quedan 2 segundos de margen antes del
+siguiente turno. HTTP mantiene sus limites propios de 3 y 5 segundos.
+
 Latido MQTT enviado significa que libcurl termino la publicacion sin error.
 QoS 0 no entrega un PUBACK; la recepcion que registra el servidor se consulta
 en mi-progreso durante la evaluacion completa.
@@ -403,7 +409,7 @@ ultima medicion que ya estaba guardada.
 python3 pruebas/verificar_latidos.py
 ~~~
 
-Diez casos usan el servidor HTTP local y un broker MQTT minimo, implementado
+Doce casos usan el servidor HTTP local y un broker MQTT minimo, implementado
 con la biblioteca estandar de Python. El broker decodifica CONNECT y PUBLISH
 para comprobar usuario, clave de prueba, topico, QoS 0 y formato del mensaje.
 Nunca usa la contraseña real ni contacta el servidor del profesor.
@@ -411,7 +417,11 @@ Nunca usa la contraseña real ni contacta el servidor del profesor.
 Los casos comprueban el periodo configurado, los latidos durante dos caidas
 HTTP, una respuesta HTTP lenta, rechazo o cierre de MQTT, recuperacion sin
 repetir un latido antiguo, reinicio con secuencia persistente y validacion
-de la configuracion. Las pruebas se ejecutan en Linux y Windows.
+de la configuracion. Tambien se comprueba que una respuesta MQTT demorada
+seis segundos termine dentro de un turno de diez y que una demora excesiva
+venza antes de preparar el siguiente latido. Las pruebas se ejecutan en
+Linux y Windows. Los contadores y los tiempos se explican en
+[la guia de diagnostico](pruebas/diagnostico_latidos.md).
 
 [Formato MQTT de curl](https://everything.curl.dev/usingcurl/mqtt.html)
 
@@ -423,7 +433,7 @@ y el proceso termino con pendientes=0.
 
 Despues consulte mi-progreso. El servidor asigno nivel4=10/10 y M8=100.0%.
 El resultado de esa comprobacion fue total=40/70 en la parte automatica.
-Los niveles 3 y 5 siguen pendientes de la sesion larga y de las alarmas.
+Esa salida corresponde a la comprobacion inicial, anterior a la sesion final.
 
 La salida y la respuesta del servidor estan en
 [la validacion de los latidos](pruebas/validacion_latidos.md).
@@ -493,25 +503,42 @@ perdida seguida de 409, Retry-After, reinicio, 404, caracteres especiales en
 el codigo, mensajes invalidos, cargas excesivas o con NUL, rafagas, acceso
 rechazado y validacion de argumentos. Tambien ejecutan enviar y escuchar a
 la vez sobre la misma base, con alarmas producidas a partir de los latidos.
-La prueba automatica de SIGINT se ejecuta en Linux; en Windows queda para
-una comprobacion manual de Ctrl+C en la consola.
+La prueba automatica de SIGINT se ejecuta en Linux. El cierre de escuchar
+con Ctrl+C tambien se comprobo manualmente en la consola de Windows; esta
+documentado en [la prueba de cierre](pruebas/validacion_cierre_windows.md).
 
 Los servidores de estas pruebas solo escuchan en 127.0.0.1 y usan una clave
 aleatoria. No consumen intentos del curso ni usan el token personal. GitHub
 Actions ejecuta las pruebas anteriores y las nuevas en Linux y Windows.
 
-## Sesion completa pendiente
+## Sesion completa de evaluacion
 
-La comprobacion automatica local no asigna puntos en el servidor del profesor.
-La ultima consulta real confirmo 40/70: niveles 0, 1, 2 y 4. Los niveles 3 y 5
-requieren ejecutar enviar y escuchar a la vez en una sesion continua de al
-menos 15 minutos, recuperar las dos caidas programadas y atender al menos
-cinco alarmas. Debemos comprobar despues mi-progreso y guardar esa salida.
+Las pruebas locales comprueban el codigo; la puntuacion automatica procede
+del servidor del profesor. La consulta final de mi-progreso confirmo los
+seis niveles completos y total=70/70. M5, M8 y M9 quedaron en 100.0%,
+M6 en 2/2, M7 en 0, M10 en 0.21s y M11 en 0.0%.
+
+La salida local de la ultima sesion informo 120 turnos de latido, con los
+120 envios terminados sin error. No hubo latidos descartados u omitidos ni
+publicaciones sin resultado al cierre. El servidor confirmo la recepcion remota.
 
 Para una sesion de 20 minutos se puede iniciar escuchar con duracion 1320 y
 despues enviar con duracion 1200. El receptor queda un margen para las ultimas
 alarmas. Durante las respuestas 503 se dejan ambos programas funcionando:
 las lecturas siguen guardandose y se envian cuando termina la espera.
+
+La evidencia esta en [la validacion final](pruebas/validacion_final.md).
+
+## Memoria y recursos
+
+En Linux, pruebas/verificar_memoria.py ejecuta cinco rutas bajo Valgrind:
+descarga y analisis, recuperacion de dos caidas HTTP, respuesta perdida y
+duplicada, reconexion MQTT y recuperacion de ACK 409. Usa los servidores
+locales de prueba y credenciales aleatorias. El procedimiento y el alcance
+estan en [la comprobacion de memoria](pruebas/valgrind.md).
+
+Los cinco casos pasaron en Linux: once ejecuciones del cliente C terminaron
+con cero errores de Memcheck y toda la memoria liberada en esos procesos.
 
 [Formato de suscripcion MQTT](https://everything.curl.dev/usingcurl/mqtt.html)
 y [callback de progreso](https://curl.se/libcurl/c/CURLOPT_XFERINFOFUNCTION.html).

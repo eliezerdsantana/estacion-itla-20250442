@@ -25,3 +25,18 @@ comprobacion correcta de estas rutas no demuestra la ausencia de errores
 en todos los caminos posibles del programa.
 
 [Manual de Memcheck](https://valgrind.org/docs/manual/mc-manual.html).
+
+## Resultado del 24 de noviembre de 2026
+
+Los cinco casos pasaron en
+[GitHub Actions](https://github.com/eliezerdsantana/estacion-itla-20250442/actions/runs/45474690773).
+Se analizaron once ejecuciones del cliente C. Los once informes indicaron:
+
+~~~text
+All heap blocks were freed -- no leaks are possible
+ERROR SUMMARY: 0 errors from 0 contexts
+~~~
+
+El resultado corresponde a las rutas ejecutadas por estos casos. El codigo
+C es el mismo de la revision funcional 34ca815; la revision 8b4b8ff incorpora
+el procedimiento y su ejecucion automatica en Linux.

@@ -20,8 +20,13 @@ Santo Domingo. Clase: miercoles 25 a las 18:00.
 - [x] Implementar, probar y subir analizar. Servidor: 24/24 al primer intento.
 - [x] Preparar la cola de telemetria y sus reintentos. Windows: 6/6 confirmadas.
 - [x] Añadir los latidos MQTT. Servidor: nivel4=10/10 y M8=100.0%.
-- [ ] Añadir la recepcion y confirmacion de alarmas.
-- [ ] Probar la sesion completa y guardar sus resultados.
+- [x] Añadir la recepcion y confirmacion de alarmas.
+- [x] Probar la sesion completa. Servidor: 70/70 automaticos.
+- [x] Comprobar cinco rutas con Valgrind: once procesos sin errores ni memoria retenida.
+- [x] Integrar el codigo probado en main mediante la propuesta 4.
+- [x] Publicar el resumen final de evaluacion, con autorizacion del estudiante.
+- [ ] Preparar la defensa oral y practicar cambios pequeños en vivo.
+- [ ] Entregar el enlace del repositorio o el ZIP en el aula virtual.
 
 Cada casilla se marca cuando tenemos su comprobacion. Cada avance funcional
 probado se guarda en un commit propio.
@@ -47,14 +52,17 @@ Los latidos del codigo 493d883 ya se probaron en el equipo. La corrida de
 mi-progreso asigno nivel4=10/10 y M8=100.0%, con total=40/70 automaticos.
 La evidencia esta en pruebas/validacion_latidos.md.
 
-escuchar ya esta implementado y paso 16 pruebas locales en Linux. Incluyen
-fragmentos MQTT, reconexion, confirmaciones repetidas y los dos procesos
-usando SQLite a la vez. La casilla de alarmas sigue pendiente hasta probarlo
-en el equipo contra el servidor del profesor.
+escuchar esta implementado y probado. Sus 16 casos incluyen fragmentos MQTT,
+reconexion, confirmaciones repetidas y los dos procesos usando SQLite a la vez.
+Las cuatro suites suman 64 casos: Linux aprueba los 64 y Windows aprueba 62,
+con dos comprobaciones automatizadas de SIGINT omitidas. El cierre de escuchar
+con Ctrl+C se comprobo manualmente en Windows.
 
-Despues se prueba la sesion continua de 15 minutos o mas, con las caidas
-programadas, la recuperacion de pendientes y las alarmas. El ultimo total
-confirmado sigue siendo 40/70; preparar el codigo no cambia esa puntuacion.
+La sesion final uso el codigo funcional 34ca815. El programa completo los
+120 latidos sin errores locales y el servidor confirmo los seis niveles:
+70/70 automaticos, M5=100.0%, M6=2/2, M7=0, M8=100.0%, M9=100.0%,
+M10=0.21s y M11=0.0%. La respuesta esta en pruebas/validacion_final.md.
+Los 30 puntos de revision y la defensa siguen a cargo del profesor.
 
 ## Metodo de estudio
 
