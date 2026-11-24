@@ -19,7 +19,7 @@ Santo Domingo. Clase: miercoles 25 a las 18:00.
 - [x] Implementar, probar y subir descargar. Commit 71884a1.
 - [x] Implementar, probar y subir analizar. Servidor: 24/24 al primer intento.
 - [x] Preparar la cola de telemetria y sus reintentos. Windows: 6/6 confirmadas.
-- [ ] Añadir los latidos MQTT.
+- [x] Añadir los latidos MQTT. Servidor: nivel4=10/10 y M8=100.0%.
 - [ ] Añadir la recepcion y confirmacion de alarmas.
 - [ ] Probar la sesion completa y guardar sus resultados.
 
@@ -42,14 +42,14 @@ automaticas pasaron en Linux y Windows. En el equipo, una ejecucion de
 y el proceso termino sin pendientes.
 La evidencia esta en pruebas/validacion_envio_inicial.md.
 
-El siguiente avance son los latidos MQTT, para que el servidor sepa que
-la estacion sigue funcionando. Despues se añaden las alarmas y se prueba
-la sesion completa, incluidas las caidas programadas del servidor del curso.
+Los latidos del codigo 493d883 ya se probaron en el equipo. La corrida de
+45 segundos confirmo nueve mediciones y envio cinco latidos. La consulta de
+mi-progreso asigno nivel4=10/10 y M8=100.0%, con total=40/70 automaticos.
+La evidencia esta en pruebas/validacion_latidos.md.
 
-Los latidos estan preparados en avance-latidos. Diez casos locales
-comprobaron el formato MQTT, la autenticacion y la independencia del HTTP.
-La casilla sigue pendiente hasta probar el avance en el equipo y subirlo
-a main. La sesion completa de evaluacion sigue siendo una casilla aparte.
+El siguiente avance es recibir las alarmas MQTT, guardarlas y confirmarlas
+por HTTP. Despues se prueba la sesion continua de 15 minutos o mas, con las
+caidas programadas del servidor del curso y la recuperacion de pendientes.
 
 ## Metodo de estudio
 

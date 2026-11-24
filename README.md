@@ -19,7 +19,7 @@ incluye sensor simulado, cola persistente y reintentos. La prueba corta en
 Windows confirmo las seis lecturas generadas, con cero pendientes al terminar.
 
 El envio ya incluye los latidos MQTT. Quedan pendientes escuchar y la sesion
-completa de evaluacion; cada avance se prueba tambien en el equipo.
+completa de evaluacion. El servidor ya confirmo nivel4=10/10 para los latidos.
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
@@ -410,3 +410,16 @@ repetir un latido antiguo, reinicio con secuencia persistente y validacion
 de la configuracion. Las pruebas se ejecutan en Linux y Windows.
 
 [Formato MQTT de curl](https://everything.curl.dev/usingcurl/mqtt.html)
+
+## Validacion inicial de los latidos
+
+El 24 de noviembre ejecute enviar durante 45 segundos en Windows. Las nueve
+mediciones, de seq=7 a seq=15, recibieron HTTP 201; se publicaron cinco latidos
+y el proceso termino con pendientes=0.
+
+Despues consulte mi-progreso. El servidor asigno nivel4=10/10 y M8=100.0%.
+El resultado de esa comprobacion fue total=40/70 en la parte automatica.
+Los niveles 3 y 5 siguen pendientes de la sesion larga y de las alarmas.
+
+La salida y la respuesta del servidor estan en
+[la validacion de los latidos](pruebas/validacion_latidos.md).
