@@ -48,7 +48,7 @@ int datos_cerrar(sqlite3 *base) {
 }
 
 /**
- * @brief Abre el archivo compartido y prepara las cuatro tablas del mandato.
+ * @brief Abre la base, las cuatro tablas del mandato y el registro auxiliar 404.
  * @param base Recibe el manejador abierto; queda NULL si falla la apertura.
  * @return 1 si la apertura y la preparacion funcionaron; 0 si hubo un error.
  */
@@ -66,7 +66,9 @@ int datos_abrir(sqlite3 **base) {
         "CREATE TABLE IF NOT EXISTS alarmas ("
         "codigo TEXT PRIMARY KEY NOT NULL, maquina TEXT NOT NULL, "
         "ts_servidor INTEGER NOT NULL, ts_recibida INTEGER NOT NULL, "
-        "ts_ack INTEGER);";
+        "ts_ack INTEGER);"
+        "CREATE TABLE IF NOT EXISTS alarmas_no_vigentes ("
+        "codigo TEXT PRIMARY KEY NOT NULL);";
 
     *base = NULL;
     if (sqlite3_open("estacion.db", base) != SQLITE_OK) {
@@ -689,6 +691,140 @@ int datos_contar_pendientes(sqlite3 *base, sqlite3_int64 *cantidad) {
         fprintf(stderr, "No se pudo contar la cola: %s\n", sqlite3_errmsg(base));
     }
     if (!liberar_sentencia(&sentencia)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Guarda la primera recepcion de una alarma sin duplicar su codigo.
+ * @param base Base abierta, compartida con enviar.
+ * @param alarma Datos interpretados del mensaje MQTT.
+ * @param nueva Recibe 1 si se inserto o 0 si ya existia el codigo.
+ * @return 1 si se conservo el registro; 0 ante un error.
+ */
+int datos_guardar_alarma(sqlite3 *base, const Alarma *alarma, int *nueva) {
+    const char *sql = "INSERT OR IGNORE INTO alarmas"
+        "(codigo,maquina,ts_servidor,ts_recibida,ts_ack) VALUES(?,?,?,?,NULL);";
+    sqlite3_stmt *s = NULL;
+    int correcto = 0;
+    *nueva = 0;
+    if (sqlite3_prepare_v2(base, sql, -1, &s, NULL) == SQLITE_OK &&
+        sqlite3_bind_text(s, 1, alarma->codigo, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_bind_text(s, 2, alarma->maquina, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_bind_int64(s, 3, alarma->ts_servidor) == SQLITE_OK &&
+        sqlite3_bind_int64(s, 4, alarma->ts_recibida) == SQLITE_OK &&
+        sqlite3_step(s) == SQLITE_DONE) {
+        *nueva = sqlite3_changes(base);
+        correcto = 1;
+    }
+    if (!correcto) {
+        fprintf(stderr, "No se pudo guardar la alarma: %s\n", sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&s)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Busca una alarma sin ACK, excluyendo las que el servidor rechazo con 404.
+ * @param base Base abierta.
+ * @param alarma Recibe una copia de los valores, si existe una pendiente.
+ * @param existe Recibe 1 si hay pendiente; 0 si no hay.
+ * @return 1 si pudo consultar; 0 ante un error.
+ */
+int datos_primera_alarma_pendiente(sqlite3 *base, Alarma *alarma, int *existe) {
+    const char *sql = "SELECT codigo,maquina,ts_servidor,ts_recibida"
+        " FROM alarmas AS a WHERE ts_ack IS NULL AND NOT EXISTS"
+        " (SELECT 1 FROM alarmas_no_vigentes AS n WHERE n.codigo=a.codigo)"
+        " ORDER BY ts_recibida,codigo LIMIT 1;";
+    sqlite3_stmt *s = NULL;
+    int paso, correcto = 0;
+    *existe = 0;
+    if (sqlite3_prepare_v2(base, sql, -1, &s, NULL) != SQLITE_OK) {
+        goto terminar_busqueda_alarma;
+    }
+    paso = sqlite3_step(s);
+    if (paso == SQLITE_ROW) {
+        const unsigned char *codigo = sqlite3_column_text(s, 0);
+        const unsigned char *maquina = sqlite3_column_text(s, 1);
+        int nc = sqlite3_column_bytes(s, 0), nm = sqlite3_column_bytes(s, 1);
+        if (codigo == NULL || maquina == NULL || nc < 1 || nm < 1 ||
+            (size_t)nc >= sizeof(alarma->codigo) ||
+            (size_t)nm >= sizeof(alarma->maquina)) {
+            fputs("Una alarma guardada no cabe en su destino.\n", stderr);
+            goto terminar_busqueda_alarma;
+        }
+        memcpy(alarma->codigo, codigo, (size_t)nc);
+        alarma->codigo[nc] = '\0';
+        memcpy(alarma->maquina, maquina, (size_t)nm);
+        alarma->maquina[nm] = '\0';
+        alarma->ts_servidor = sqlite3_column_int64(s, 2);
+        alarma->ts_recibida = sqlite3_column_int64(s, 3);
+        *existe = 1;
+        paso = sqlite3_step(s);
+    }
+    correcto = paso == SQLITE_DONE;
+terminar_busqueda_alarma:
+    if (!correcto) {
+        fprintf(stderr, "No se pudo consultar la alarma pendiente: %s\n",
+                sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&s)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Registra cuando se verifico la confirmacion 200 o 409 del servidor.
+ * @param base Base abierta.
+ * @param codigo Identificador de la alarma.
+ * @param ts_ack Fecha local de la confirmacion.
+ * @return 1 si se actualizo la alarma; 0 ante un error.
+ */
+int datos_confirmar_alarma(sqlite3 *base, const char *codigo,
+                          sqlite3_int64 ts_ack) {
+    sqlite3_stmt *s = NULL;
+    int correcto = 0;
+    if (sqlite3_prepare_v2(base, "UPDATE alarmas SET ts_ack=? WHERE codigo=?;",
+                           -1, &s, NULL) == SQLITE_OK &&
+        sqlite3_bind_int64(s, 1, ts_ack) == SQLITE_OK &&
+        sqlite3_bind_text(s, 2, codigo, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_step(s) == SQLITE_DONE && sqlite3_changes(base) == 1) {
+        correcto = 1;
+    }
+    if (!correcto) {
+        fprintf(stderr, "No se pudo registrar el ACK: %s\n", sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&s)) {
+        correcto = 0;
+    }
+    return correcto;
+}
+
+/**
+ * @brief Conserva una alarma que ya no existe en el servidor sin inventar un ACK.
+ * @param base Base abierta.
+ * @param codigo Identificador que recibio HTTP 404.
+ * @return 1 si se registro; 0 ante un error.
+ */
+int datos_alarma_no_vigente(sqlite3 *base, const char *codigo) {
+    sqlite3_stmt *s = NULL;
+    int correcto = 0;
+    if (sqlite3_prepare_v2(base,
+            "INSERT OR IGNORE INTO alarmas_no_vigentes(codigo) VALUES(?);",
+            -1, &s, NULL) == SQLITE_OK &&
+        sqlite3_bind_text(s, 1, codigo, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
+        sqlite3_step(s) == SQLITE_DONE) {
+        correcto = 1;
+    }
+    if (!correcto) {
+        fprintf(stderr, "No se pudo registrar el 404 de la alarma: %s\n",
+                sqlite3_errmsg(base));
+    }
+    if (!liberar_sentencia(&s)) {
         correcto = 0;
     }
     return correcto;

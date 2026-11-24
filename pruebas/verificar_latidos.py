@@ -1,6 +1,7 @@
 """Pruebas de MQTT junto con HTTP: no contactan el servidor del curso."""
 from contextlib import closing
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -60,8 +61,10 @@ class LatidosITLA(unittest.TestCase):
                               'FROM telemetria ORDER BY seq').fetchall()
 
     def ejecutar(self, *args):
+        mqtt_antes = len(self.ctx.mqtt_mensajes)
         r = subprocess.run([str(EXE), *args], cwd=self.carpeta, env=self.env,
                            capture_output=True, text=True, timeout=20)
+        r.mqtt_antes = mqtt_antes
         self.assertNotIn(TOKEN, r.stdout + r.stderr)
         return r
 
@@ -70,8 +73,17 @@ class LatidosITLA(unittest.TestCase):
         self.assertEqual(len(self.filas()), cantidad)
         self.assertEqual(self.ctx.errores, [])
         self.assertEqual(self.ctx.mqtt_errores, [])
+        resumen = re.search(r'Resumen de latidos: turnos=(\d+) enviados=(\d+) '
+                            r'descartados=(\d+) omitidos=(\d+) sin_resultado=(\d+)',
+                            resultado.stdout)
+        self.assertIsNotNone(resumen, resultado.stdout)
+        turnos, enviados, descartados, omitidos, sin_resultado = map(
+            int, resumen.groups())
+        self.assertEqual(turnos, enviados + descartados + omitidos + sin_resultado)
+        # El broker independiente comprueba las publicaciones que recibio.
+        self.assertEqual(enviados, len(self.ctx.mqtt_mensajes) - resultado.mqtt_antes)
 
-    def cargas(self):
+    def cargas(self, edad_maxima_s=3):
         salida = []
         for mensaje in self.ctx.mqtt_mensajes:
             self.assertEqual(mensaje['topico'],
@@ -87,7 +99,7 @@ class LatidosITLA(unittest.TestCase):
             seq, pendientes, ts = map(int, campos[1:])
             self.assertGreater(seq, 0)
             self.assertGreaterEqual(pendientes, 0)
-            self.assertLessEqual(abs(mensaje['fecha'] - ts), 3)
+            self.assertLessEqual(abs(mensaje['fecha'] - ts), edad_maxima_s)
             salida.append((seq, pendientes, ts))
         return salida
 
@@ -151,6 +163,16 @@ class LatidosITLA(unittest.TestCase):
         self.assertEqual(len({c[0] for c in cargas}), len(cargas))
         self.assertTrue(all(f[4] == 1 for f in self.filas()))
         self.assertIn('Latido MQTT descartado:', r.stdout)
+        tiempos = re.search(r'curl=28 total_ms=([\d.]+) dns_ms=([\d.]+) '
+                            r'conexion_ms=([\d.]+)', r.stderr)
+        self.assertIsNotNone(tiempos, r.stderr)
+        total, dns, conexion = map(float, tiempos.groups())
+        # El TCP local ya estaba abierto: fue la respuesta MQTT la que se demoro.
+        self.assertGreaterEqual(total, 700)
+        self.assertLess(total, 1600)
+        self.assertGreater(conexion, 0)
+        self.assertGreater(total, conexion)
+        self.assertGreaterEqual(dns, 0)
 
     def test_07_broker_corta_y_siguiente_latido_lleva_datos_nuevos(self):
         self.ctx.mqtt_modo = 'cortar_primera'
@@ -182,6 +204,35 @@ class LatidosITLA(unittest.TestCase):
         self.assertEqual(self.filas(), [])
         self.assertEqual(self.ctx.eventos, [])
         self.assertEqual(self.ctx.mqtt_conexiones, [])
+
+    def test_11_demora_de_seis_segundos_cabe_en_un_turno_de_diez(self):
+        self.config('latido_s', '10')
+        self.ctx.mqtt_modo = 'demorar_primera'
+        r = self.ejecutar('enviar', '--duracion', '12')
+        self.comprobar(r, 12)
+        # La fecha se preparo antes de la demora; sigue dentro del turno de 10 s.
+        self.assertEqual([c[0] for c in self.cargas(edad_maxima_s=9)], [1,11])
+        self.assertTrue(all(f[4] == 1 for f in self.filas()))
+        espera = self.ctx.mqtt_mensajes[0]['mono'] - self.ctx.mqtt_conexiones[0][0]
+        self.assertGreaterEqual(espera, 5.8)
+        self.assertLess(espera, 8)
+        self.assertNotIn('Fallo de latido MQTT', r.stderr)
+        self.assertIn('turnos=2 enviados=2 descartados=0 omitidos=0 sin_resultado=0',
+                      r.stdout)
+
+    def test_12_demora_excesiva_vence_antes_del_siguiente_turno(self):
+        self.config('latido_s', '10')
+        self.ctx.mqtt_modo = 'demorar_larga'
+        r = self.ejecutar('enviar', '--duracion', '12')
+        self.comprobar(r, 12)
+        self.assertEqual([c[0] for c in self.cargas()], [11])
+        self.assertTrue(all(f[4] == 1 for f in self.filas()))
+        tiempos = re.search(r'curl=28 total_ms=([\d.]+)', r.stderr)
+        self.assertIsNotNone(tiempos, r.stderr)
+        self.assertGreaterEqual(float(tiempos[1]), 7800)
+        self.assertLess(float(tiempos[1]), 9500)
+        self.assertIn('turnos=2 enviados=1 descartados=1 omitidos=0 sin_resultado=0',
+                      r.stdout)
 
 
 if __name__ == '__main__':

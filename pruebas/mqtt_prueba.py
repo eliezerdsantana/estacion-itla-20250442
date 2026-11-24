@@ -70,8 +70,8 @@ class PublicadorPrueba(socketserver.BaseRequestHandler):
             modo = ctx.mqtt_modo
             if modo == 'cortar_primera' and numero == 1:
                 return
-            if modo == 'demorar_primera' and numero == 1:
-                time.sleep(6)
+            if modo in ('demorar_primera', 'demorar_larga') and numero == 1:
+                time.sleep(6 if modo == 'demorar_primera' else 10)
             if modo == 'rechazar' or not valido:
                 self.request.sendall(b'\x20\x02\x00\x05')
                 return
