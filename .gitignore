@@ -1,0 +1,10 @@
+build/
+estacion
+estacion.exe
+*.o
+*.exe
+*.db
+*.db-*
+.env
+.env.*
+*.zip
