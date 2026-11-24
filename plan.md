@@ -47,9 +47,14 @@ Los latidos del codigo 493d883 ya se probaron en el equipo. La corrida de
 mi-progreso asigno nivel4=10/10 y M8=100.0%, con total=40/70 automaticos.
 La evidencia esta en pruebas/validacion_latidos.md.
 
-El siguiente avance es recibir las alarmas MQTT, guardarlas y confirmarlas
-por HTTP. Despues se prueba la sesion continua de 15 minutos o mas, con las
-caidas programadas del servidor del curso y la recuperacion de pendientes.
+escuchar ya esta implementado y paso 16 pruebas locales en Linux. Incluyen
+fragmentos MQTT, reconexion, confirmaciones repetidas y los dos procesos
+usando SQLite a la vez. La casilla de alarmas sigue pendiente hasta probarlo
+en el equipo contra el servidor del profesor.
+
+Despues se prueba la sesion continua de 15 minutos o mas, con las caidas
+programadas, la recuperacion de pendientes y las alarmas. El ultimo total
+confirmado sigue siendo 40/70; preparar el codigo no cambia esa puntuacion.
 
 ## Metodo de estudio
 

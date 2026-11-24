@@ -34,6 +34,17 @@ typedef struct {
     double temp, corriente;
 } Telemetria;
 
+typedef struct {
+    char codigo[80], maquina[16];
+    sqlite3_int64 ts_servidor, ts_recibida;
+} Alarma;
+
+/* Conserva la primera recepcion; los duplicados no cambian sus fechas. */
+int datos_guardar_alarma(sqlite3 *base, const Alarma *alarma, int *nueva);
+int datos_primera_alarma_pendiente(sqlite3 *base, Alarma *alarma, int *existe);
+int datos_confirmar_alarma(sqlite3 *base, const char *codigo, sqlite3_int64 ts_ack);
+int datos_alarma_no_vigente(sqlite3 *base, const char *codigo);
+
 /* Conserva primero la medicion y asigna MAX(seq)+1 de forma atomica. */
 int datos_guardar_telemetria(sqlite3 *base, sqlite3_int64 ts, double temp,
                             double corriente, sqlite3_int64 *seq);

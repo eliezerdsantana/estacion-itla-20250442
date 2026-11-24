@@ -2,7 +2,7 @@ name: Compilacion y pruebas locales
 
 on:
   push:
-    branches: [main, avance-analisis, avance-telemetria, avance-latidos]
+    branches: [main, avance-analisis, avance-telemetria, avance-latidos, avance-alarmas]
   pull_request:
 
 permissions:
@@ -29,6 +29,8 @@ jobs:
         run: python3 pruebas/verificar_envio.py
       - name: Probar los latidos MQTT junto con HTTP
         run: python3 pruebas/verificar_latidos.py
+      - name: Probar las alarmas, sus ACK y los dos procesos
+        run: python3 pruebas/verificar_alarmas.py
 
   windows:
     runs-on: windows-2022
@@ -59,3 +61,5 @@ jobs:
         run: python pruebas/verificar_envio.py
       - name: Probar los latidos MQTT junto con HTTP en Windows
         run: python pruebas/verificar_latidos.py
+      - name: Probar las alarmas y los dos procesos en Windows
+        run: python pruebas/verificar_alarmas.py

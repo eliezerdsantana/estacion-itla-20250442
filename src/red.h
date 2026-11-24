@@ -9,6 +9,7 @@
 #define RED_H
 
 #include <stddef.h>
+#include <signal.h>
 #include <curl/curl.h>
 
 #define TAM_RESPUESTA 65536
@@ -44,6 +45,17 @@ int red_latido_preparar(RedEnvio *envio, const char *host,
 int red_latido_ocupado(const RedEnvio *envio);
 int red_latido_iniciar(RedEnvio *envio, const char *texto);
 int red_latido_recoger(RedEnvio *envio, int *correcto);
+
+typedef int (*AlRecibirAlarma)(const char *texto, void *usuario);
+
+/* Suscripcion con acumulacion de fragmentos; el ACK usa el easy HTTP separado. */
+int red_alarmas_preparar(RedEnvio *envio, const char *host,
+                         const char *matricula, const char *token,
+                         AlRecibirAlarma recibir_alarma, void *usuario,
+                         const volatile sig_atomic_t *detener);
+int red_alarmas_iniciar(RedEnvio *envio);
+int red_alarmas_ocupado(const RedEnvio *envio);
+int red_alarmas_recoger(RedEnvio *envio, int *correcto);
 
 /* Abre la conexion HTTP usando el host y el token; devuelve 1 si funciona. */
 int red_abrir(Conexion *conexion, const char *host, const char *token);

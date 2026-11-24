@@ -42,6 +42,14 @@ struct RedEnvio {
     CURL *latido;
     int latido_activo, latido_completo, latido_correcto;
     char texto_latido[100];
+    CURL *suscripcion;
+    int suscripcion_activa, suscripcion_completa, suscripcion_correcta;
+    unsigned char rx[4096];
+    size_t rx_usados;
+    char topico_alarmas[128];
+    AlRecibirAlarma recibir_alarma;
+    void *usuario_alarma;
+    const volatile sig_atomic_t *detener;
 };
 
 /**
@@ -489,6 +497,22 @@ int red_envio_avanzar(RedEnvio *envio, int espera_ms) {
                 fprintf(stderr, "Fallo de latido MQTT: %s\n",
                         curl_easy_strerror(estado));
             }
+        } else if (mensaje->msg == CURLMSG_DONE &&
+                   mensaje->easy_handle == envio->suscripcion) {
+            CURLcode estado = mensaje->data.result;
+            if (curl_multi_remove_handle(envio->multi,
+                                         envio->suscripcion) != CURLM_OK) {
+                fputs("No se pudo retirar la suscripcion MQTT.\n", stderr);
+                return 0;
+            }
+            envio->suscripcion_activa = 0;
+            envio->suscripcion_completa = 1;
+            envio->suscripcion_correcta = estado == CURLE_OK;
+            if (estado != CURLE_OK &&
+                (envio->detener == NULL || !*envio->detener)) {
+                fprintf(stderr, "Fallo de suscripcion MQTT: %s\n",
+                        curl_easy_strerror(estado));
+            }
         }
     }
     return 1;
@@ -532,6 +556,13 @@ int red_envio_cerrar(RedEnvio *envio) {
     if (envio->latido != NULL) {
         curl_easy_cleanup(envio->latido);
     }
+    if (envio->suscripcion_activa &&
+        curl_multi_remove_handle(envio->multi, envio->suscripcion) != CURLM_OK) {
+        correcto = 0;
+    }
+    if (envio->suscripcion != NULL) {
+        curl_easy_cleanup(envio->suscripcion);
+    }
     if (curl_multi_cleanup(envio->multi) != CURLM_OK) {
         correcto = 0;
     }
@@ -551,15 +582,18 @@ int red_envio_cerrar(RedEnvio *envio) {
 }
 
 /**
- * @brief Prepara un easy exclusivo para publicar latidos por MQTT.
- * @param envio Estado multi ya abierto para la sesion de enviar.
+ * @brief Prepara un easy MQTT con credenciales del entorno.
+ * @param destino Recibe el manejador; el propietario lo libera al cerrar.
  * @param host Servidor validado al abrir la conexion HTTP.
- * @param matricula Usuario MQTT y parte del topico; solo admite digitos.
+ * @param matricula Usuario MQTT; solo admite digitos.
  * @param token Clave leida del entorno, que no se agrega a la URL ni se imprime.
+ * @param topico Ruta MQTT fija del programa, que ya incluye la matricula.
+ * @param limite_ms Tiempo total; 0 permite una suscripcion continua.
  * @return 1 si MQTT esta disponible y configurado; 0 si no pudo prepararse.
  */
-int red_latido_preparar(RedEnvio *envio, const char *host,
-                        const char *matricula, const char *token) {
+static int preparar_mqtt(CURL **destino, const char *host,
+                         const char *matricula, const char *token,
+                         const char *topico, long limite_ms) {
     const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
     const char *const *protocolo;
     char url[512];
@@ -586,25 +620,47 @@ int red_latido_preparar(RedEnvio *envio, const char *host,
             return 0;
         }
     }
-    n = snprintf(url, sizeof(url),
-        "mqtt://%s:1883/itla/estudiantes/%s/latido", host, matricula);
+    n = snprintf(url, sizeof(url), "mqtt://%s:1883/%s", host, topico);
     if (n < 0 || (size_t)n >= sizeof(url)) {
         fputs("La URL MQTT supera el espacio disponible.\n", stderr);
         return 0;
     }
-    envio->latido = curl_easy_init();
-    if (envio->latido == NULL) {
+    *destino = curl_easy_init();
+    if (*destino == NULL) {
         fputs("No se pudo reservar el manejador MQTT.\n", stderr);
         return 0;
     }
-    if (curl_easy_setopt(envio->latido, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_USERNAME, matricula) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_PASSWORD, token) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_CONNECTTIMEOUT_MS, 3000L) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_TIMEOUT_MS, 5000L) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
-        curl_easy_setopt(envio->latido, CURLOPT_FORBID_REUSE, 1L) != CURLE_OK) {
-        fputs("No se pudieron configurar los latidos MQTT.\n", stderr);
+    if (curl_easy_setopt(*destino, CURLOPT_URL, url) != CURLE_OK ||
+        curl_easy_setopt(*destino, CURLOPT_USERNAME, matricula) != CURLE_OK ||
+        curl_easy_setopt(*destino, CURLOPT_PASSWORD, token) != CURLE_OK ||
+        curl_easy_setopt(*destino, CURLOPT_CONNECTTIMEOUT_MS, 3000L) != CURLE_OK ||
+        curl_easy_setopt(*destino, CURLOPT_TIMEOUT_MS, limite_ms) != CURLE_OK ||
+        curl_easy_setopt(*destino, CURLOPT_NOSIGNAL, 1L) != CURLE_OK) {
+        fputs("No se pudo configurar MQTT.\n", stderr);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Prepara la publicacion de latidos con un manejador independiente.
+ * @param envio Estado multi.
+ * @param host Servidor del entorno.
+ * @param matricula Usuario MQTT.
+ * @param token Clave del entorno.
+ * @return 1 si quedo preparado; 0 ante un error.
+ */
+int red_latido_preparar(RedEnvio *envio, const char *host,
+                        const char *matricula, const char *token) {
+    char topico[128];
+    int n = snprintf(topico, sizeof(topico),
+                      "itla/estudiantes/%s/latido", matricula);
+    if (n < 0 || (size_t)n >= sizeof(topico) ||
+        !preparar_mqtt(&envio->latido, host, matricula, token, topico, 5000L)) {
+        return 0;
+    }
+    if (curl_easy_setopt(envio->latido, CURLOPT_FORBID_REUSE, 1L) != CURLE_OK) {
+        fputs("No se pudo configurar el cierre del latido.\n", stderr);
         return 0;
     }
     return 1;
@@ -658,5 +714,196 @@ int red_latido_recoger(RedEnvio *envio, int *correcto) {
     }
     *correcto = envio->latido_correcto;
     envio->latido_completo = 0;
+    return 1;
+}
+
+/**
+ * @brief Extrae todos los mensajes completos del acumulador MQTT.
+ * @param envio Acumulador y funcion receptora de la aplicacion.
+ * @return 1 si los datos son validos o falta un fragmento; 0 si debe reconectar.
+ */
+static int procesar_fragmentos(RedEnvio *envio) {
+    while (envio->rx_usados >= 2) {
+        size_t topico_n = ((size_t)envio->rx[0] << 8) | envio->rx[1];
+        unsigned char *carga, *fin;
+        size_t cabecera, longitud, consumidos;
+        char texto[100];
+
+        if (topico_n == 0 || topico_n >= sizeof(envio->topico_alarmas)) {
+            fputs("Longitud de topico MQTT invalida; se reconectara.\n", stderr);
+            return 0;
+        }
+        cabecera = 2 + topico_n;
+        if (envio->rx_usados < cabecera) {
+            return 1;
+        }
+        carga = envio->rx + cabecera;
+        fin = memchr(carga, '\n', envio->rx_usados - cabecera);
+        if (fin == NULL) {
+            if (envio->rx_usados - cabecera >= sizeof(texto) - 1) {
+                fputs("Mensaje MQTT excesivo; se reconectara.\n", stderr);
+                return 0;
+            }
+            return 1;
+        }
+        longitud = (size_t)(fin - carga);
+        if (longitud >= sizeof(texto) - 1 ||
+            memchr(carga, '\0', longitud) != NULL) {
+            fputs("Mensaje MQTT con formato invalido; se reconectara.\n", stderr);
+            return 0;
+        }
+        consumidos = cabecera + longitud + 1;
+        if (topico_n == strlen(envio->topico_alarmas) &&
+            memcmp(envio->rx + 2, envio->topico_alarmas, topico_n) == 0) {
+            memcpy(texto, carga, longitud);
+            texto[longitud] = '\0';
+            if (longitud != 0 && texto[longitud - 1] == '\r') {
+                texto[longitud - 1] = '\0';
+            }
+            if (!envio->recibir_alarma(texto, envio->usuario_alarma)) {
+                return 0;
+            }
+        }
+        memmove(envio->rx, envio->rx + consumidos,
+                envio->rx_usados - consumidos);
+        envio->rx_usados -= consumidos;
+    }
+    return 1;
+}
+
+/**
+ * @brief Acumula fragmentos sin asumir que una llamada contiene un mensaje.
+ * @param datos Bytes entregados por libcurl, sin terminador obligatorio.
+ * @param unidad Tamano de cada elemento.
+ * @param cantidad Numero de elementos.
+ * @param usuario Estado de la suscripcion.
+ * @return Bytes procesados, o 0 si hay un mensaje invalido o un fallo local.
+ */
+static size_t recibir_alarmas(char *datos, size_t unidad, size_t cantidad,
+                              void *usuario) {
+    RedEnvio *envio = usuario;
+    size_t total, usados = 0;
+    if (unidad != 0 && cantidad > SIZE_MAX / unidad) {
+        return 0;
+    }
+    total = unidad * cantidad;
+    while (usados < total) {
+        size_t libres = sizeof(envio->rx) - envio->rx_usados;
+        size_t copiar = total - usados;
+        if (libres == 0) {
+            return 0;
+        }
+        if (copiar > libres) {
+            copiar = libres;
+        }
+        memcpy(envio->rx + envio->rx_usados, datos + usados, copiar);
+        envio->rx_usados += copiar;
+        usados += copiar;
+        if (!procesar_fragmentos(envio)) {
+            return 0;
+        }
+    }
+    return total;
+}
+
+/**
+ * @brief Permite abortar la suscripcion cuando el manejador marca la salida.
+ * @param usuario Estado de la red.
+ * @param total_bajada Bytes esperados, si se conocen.
+ * @param bajados Bytes recibidos.
+ * @param total_subida Bytes esperados de subida.
+ * @param subidos Bytes enviados.
+ * @return 1 para cancelar; 0 para continuar.
+ */
+static int progreso_alarmas(void *usuario, curl_off_t total_bajada,
+                            curl_off_t bajados, curl_off_t total_subida,
+                            curl_off_t subidos) {
+    RedEnvio *envio = usuario;
+    (void)total_bajada;
+    (void)bajados;
+    (void)total_subida;
+    (void)subidos;
+    return envio->detener != NULL && *envio->detener;
+}
+
+/**
+ * @brief Prepara la suscripcion continua con un easy distinto del HTTP.
+ * @param envio Estado multi.
+ * @param host Servidor del entorno.
+ * @param matricula Identidad del estudiante.
+ * @param token Clave del entorno.
+ * @param recibir_alarma Funcion que recibe cada texto completo.
+ * @param usuario Estado que necesita la funcion receptora.
+ * @param detener Bandera que solo modifica el manejador de senales.
+ * @return 1 si quedo preparada; 0 ante un error.
+ */
+int red_alarmas_preparar(RedEnvio *envio, const char *host,
+                         const char *matricula, const char *token,
+                         AlRecibirAlarma recibir_alarma, void *usuario,
+                         const volatile sig_atomic_t *detener) {
+    int n = snprintf(envio->topico_alarmas, sizeof(envio->topico_alarmas),
+                      "itla/planta/%s/alarma", matricula);
+    if (n < 0 || (size_t)n >= sizeof(envio->topico_alarmas) ||
+        recibir_alarma == NULL || detener == NULL ||
+        !preparar_mqtt(&envio->suscripcion, host, matricula, token,
+                       envio->topico_alarmas, 0L)) {
+        return 0;
+    }
+    envio->recibir_alarma = recibir_alarma;
+    envio->usuario_alarma = usuario;
+    envio->detener = detener;
+    if (curl_easy_setopt(envio->suscripcion, CURLOPT_HTTPGET, 1L) != CURLE_OK ||
+        curl_easy_setopt(envio->suscripcion, CURLOPT_WRITEFUNCTION,
+                         recibir_alarmas) != CURLE_OK ||
+        curl_easy_setopt(envio->suscripcion, CURLOPT_WRITEDATA, envio) != CURLE_OK ||
+        curl_easy_setopt(envio->suscripcion, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
+        curl_easy_setopt(envio->suscripcion, CURLOPT_XFERINFOFUNCTION,
+                         progreso_alarmas) != CURLE_OK ||
+        curl_easy_setopt(envio->suscripcion, CURLOPT_XFERINFODATA, envio) != CURLE_OK) {
+        fputs("No se pudo configurar la suscripcion MQTT.\n", stderr);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Inicia o reconecta la suscripcion, descartando fragmentos antiguos.
+ * @param envio Estado preparado.
+ * @return 1 si se inicio; 0 ante un error interno.
+ */
+int red_alarmas_iniciar(RedEnvio *envio) {
+    if (envio->suscripcion == NULL || red_alarmas_ocupado(envio)) {
+        return 0;
+    }
+    envio->rx_usados = 0;
+    if (curl_multi_add_handle(envio->multi, envio->suscripcion) != CURLM_OK) {
+        fputs("No se pudo iniciar la suscripcion MQTT.\n", stderr);
+        return 0;
+    }
+    envio->suscripcion_activa = 1;
+    return 1;
+}
+
+/**
+ * @brief Indica si queda una conexion o un cierre sin recoger.
+ * @param envio Estado consultado.
+ * @return 1 si esta ocupado; 0 si puede reconectar.
+ */
+int red_alarmas_ocupado(const RedEnvio *envio) {
+    return envio->suscripcion_activa || envio->suscripcion_completa;
+}
+
+/**
+ * @brief Recoge el final de una conexion MQTT una sola vez.
+ * @param envio Estado consultado.
+ * @param correcto Recibe si termino sin un error de transporte.
+ * @return 1 si habia un resultado; 0 si la conexion sigue activa.
+ */
+int red_alarmas_recoger(RedEnvio *envio, int *correcto) {
+    if (!envio->suscripcion_completa) {
+        return 0;
+    }
+    *correcto = envio->suscripcion_correcta;
+    envio->suscripcion_completa = 0;
     return 1;
 }

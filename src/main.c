@@ -17,6 +17,7 @@
 #include "descarga.h"
 #include "analisis.h"
 #include "envio.h"
+#include "escucha.h"
 
 /**
  * @brief Interpreta un limite de ejecucion positivo, sin texto sobrante.
@@ -38,7 +39,7 @@ static int leer_duracion(const char *texto, unsigned int *segundos) {
 }
 
 /**
- * @brief Lee la orden y ejecuta config, descargar, analizar o enviar.
+ * @brief Lee la orden y ejecuta el subcomando solicitado.
  * @param argc Numero de elementos recibidos en la linea de comandos.
  * @param argv Nombre del programa y subcomando solicitado.
  * @return 0 si se completo la operacion; 1 ante un error.
@@ -54,20 +55,23 @@ int main(int argc, char *argv[]) {
     int correcto;
     int enviar_analisis;
     unsigned int duracion_s = 0;
-    int envio_limitado;
+    int ejecucion_limitada;
 
     enviar_analisis = argc == 3 && strcmp(argv[1], "analizar") == 0 &&
                       strcmp(argv[2], "--enviar") == 0;
-    envio_limitado = argc == 4 && strcmp(argv[1], "enviar") == 0 &&
+    ejecucion_limitada = argc == 4 &&
+                     (strcmp(argv[1], "enviar") == 0 ||
+                      strcmp(argv[1], "escuchar") == 0) &&
                      strcmp(argv[2], "--duracion") == 0 &&
                      leer_duracion(argv[3], &duracion_s);
-    if ((!enviar_analisis && !envio_limitado && argc != 2) ||
+    if ((!enviar_analisis && !ejecucion_limitada && argc != 2) ||
         (strcmp(argv[1], "config") != 0 &&
          strcmp(argv[1], "descargar") != 0 &&
          strcmp(argv[1], "analizar") != 0 &&
-         strcmp(argv[1], "enviar") != 0)) {
+         strcmp(argv[1], "enviar") != 0 &&
+         strcmp(argv[1], "escuchar") != 0)) {
         fputs("Uso: ./estacion config | descargar | analizar [--enviar] | "
-              "enviar [--duracion segundos]\n",
+              "enviar [--duracion segundos] | escuchar [--duracion segundos]\n",
               stderr);
         return 1;
     }
@@ -87,6 +91,11 @@ int main(int argc, char *argv[]) {
     }
     if (strcmp(argv[1], "enviar") == 0) {
         correcto = enviar(&conexion, host, matricula, token, duracion_s);
+        red_cerrar(&conexion);
+        return correcto ? 0 : 1;
+    }
+    if (strcmp(argv[1], "escuchar") == 0) {
+        correcto = escuchar(&conexion, host, matricula, token, duracion_s);
         red_cerrar(&conexion);
         return correcto ? 0 : 1;
     }

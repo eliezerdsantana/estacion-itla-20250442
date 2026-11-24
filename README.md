@@ -5,7 +5,7 @@ Programacion para Mecatronicos, seccion de los miercoles.
 
 ## Avance actual
 
-Ya estan implementados `config`, `descargar`, `analizar` y `enviar`.
+Ya estan implementados `config`, `descargar`, `analizar`, `enviar` y `escuchar`.
 
 `config` pide la configuracion al servidor, comprueba la respuesta HTTP y guarda
 los siete campos en SQLite. Despues imprime los valores consultados de la base.
@@ -18,15 +18,16 @@ El analisis ya fue aceptado por el servidor del curso. El avance de enviar
 incluye sensor simulado, cola persistente y reintentos. La prueba corta en
 Windows confirmo las seis lecturas generadas, con cero pendientes al terminar.
 
-El envio ya incluye los latidos MQTT. Quedan pendientes escuchar y la sesion
-completa de evaluacion. El servidor ya confirmo nivel4=10/10 para los latidos.
+El envio ya incluye los latidos MQTT; el servidor confirmo nivel4=10/10.
+La recepcion de alarmas esta preparada para su comprobacion en el equipo.
+Queda pendiente la sesion completa de evaluacion de telemetria y alarmas.
 
 Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 
 ## Archivos
 
 - `src/main.c`: lee el subcomando y las variables de entorno.
-- `src/red.c` y `src/red.h`: manejador HTTP, autenticacion y recepcion del texto.
+- `src/red.c` y `src/red.h`: HTTP, MQTT, autenticacion y acumulacion de fragmentos.
 - `src/datos.c` y `src/datos.h`: tablas, transacciones y sentencias de SQLite.
 - `src/descarga.c` y `src/descarga.h`: lectura del CSV, paginacion y comprobacion
   de la descarga.
@@ -34,6 +35,7 @@ Repositorio: https://github.com/eliezerdsantana/estacion-itla-20250442
 - `Makefile`: compila el programa y SQLite por separado.
 - `plan.md`: checklist del trabajo y del avance probado.
 - `src/envio.c` y `src/envio.h`: alternan el muestreo y el envio de la cola.
+- `src/escucha.c` y `src/escucha.h`: interpretan alarmas y coordinan su ACK HTTP.
 - `src/sensor.c` y `src/sensor.h`: generan las mediciones simuladas.
 - `src/tiempo.c` y `src/tiempo.h`: reloj monotono de Linux y Windows.
 - `pruebas/verificar_envio.py`: pruebas de persistencia, reintentos y cierre.
@@ -113,12 +115,13 @@ datos y los archivos `.env` quedan excluidos de Git.
 - El manejador de libcurl se reutiliza y se libera al terminar.
 - Bearer se configura con `CURLOPT_XOAUTH2_BEARER` y
   `CURLOPT_HTTPAUTH` con `CURLAUTH_BEARER`, como pide el mandato.
-- La conexion tiene un limite de 3 segundos y la peticion de 5 segundos.
+- HTTP tiene un limite de 3 segundos para conectar y de 5 segundos en total.
+  La suscripcion MQTT es continua, con limite de conexion de 3 segundos.
 - Se revisan el resultado de libcurl y el codigo HTTP por separado.
 - El callback recibe fragmentos y evita escribir fuera del buffer.
 - SQLite usa WAL y espera hasta 2000 ms si la base esta ocupada.
-- Se crean las cuatro tablas del mandato; por ahora se llenan `config` y
-  `lecturas_planta`.
+- Se crean las cuatro tablas del mandato. Una tabla auxiliar registra los
+  codigos de alarma que el servidor rechazo con 404, sin inventar su ACK.
 - Los valores recibidos se guardan con `prepare`, `bind`, `step` y `finalize`.
 - La transaccion se revierte si la configuracion esta incompleta, repetida
   o pertenece a otra matricula.
@@ -179,8 +182,8 @@ el codigo por partes para poder explicar su funcionamiento en la defensa.
 ## Proposito del programa
 
 Esta estacion recibe las mediciones de cuatro maquinas, las conserva en SQLite
-y prepara un informe por maquina. Las etapas siguientes añadiran el envio de
-lecturas propias, los latidos y la confirmacion de alarmas.
+y prepara un informe por maquina. Tambien envia lecturas propias, publica
+latidos y confirma las alarmas que recibe del servidor.
 
 ## Analisis por maquina
 
@@ -241,7 +244,8 @@ Despues de compilar, se ejecutan en Linux con:
 python3 pruebas/verificar_analisis.py
 ~~~
 
-GitHub Actions ejecuta la compilacion con -Werror y estas pruebas en Ubuntu.
+GitHub Actions ejecuta la compilacion con -Werror y las pruebas en Ubuntu y
+Windows con MSYS2 UCRT64.
 
 ## Validacion del analisis con el servidor
 
@@ -326,7 +330,7 @@ python3 pruebas/verificar_envio.py
 Las 19 comprobaciones anteriores tambien siguen pasando. Estas pruebas solo
 usan 127.0.0.1, bases temporales y una credencial aleatoria de prueba.
 
-El envio tambien publica latidos. La recepcion de alarmas sigue pendiente.
+El envio tambien publica latidos. escuchar recibe y confirma las alarmas.
 La evaluacion de los niveles 3 a 5 requiere la sesion continua de 15 minutos
 o mas con todos esos componentes.
 
@@ -423,3 +427,91 @@ Los niveles 3 y 5 siguen pendientes de la sesion larga y de las alarmas.
 
 La salida y la respuesta del servidor estan en
 [la validacion de los latidos](pruebas/validacion_latidos.md).
+
+## Recepcion y confirmacion de alarmas
+
+En otra terminal ejecuto escuchar. Uso la misma carpeta y estacion.db, pero
+cargo tambien las variables de entorno en esa terminal. enviar sigue activo:
+el servidor solo genera alarmas cuando ha recibido un latido en los ultimos
+60 segundos.
+
+~~~bash
+make run ARGS=escuchar
+~~~
+
+Tambien existe un limite opcional para las pruebas:
+
+~~~bash
+make run ARGS="escuchar --duracion 90"
+~~~
+
+escuchar se suscribe a itla/planta/<MATRICULA>/alarma. El callback de libcurl
+entrega bytes: dos indican el largo del topico, luego vienen el topico y la
+linea de texto. El acumulador conserva los fragmentos incompletos y extrae
+todos los mensajes completos, aunque lleguen varios juntos. Acepta lineas
+de menos de 100 bytes, terminadas en salto de linea. Un mensaje excesivo o
+con bytes nulos cancela esa conexion para recuperarla mediante reconexion.
+
+NINGUNA;<ts> se ignora. Para ALARMA;<codigo>;<maquina>;<ts>, primero se guarda
+una fila en alarmas. codigo es su clave primaria: recibirlo de nuevo conserva
+la primera recepcion y no crea otra fila. Una alarma ya confirmada tampoco
+genera otro POST.
+
+Las alarmas pendientes se consultan en SQLite. El ACK usa un manejador HTTP
+distinto del de la suscripcion, dentro del mismo multi; por eso una respuesta
+HTTP lenta no detiene la recepcion MQTT. Se envia a /api/v1/alarmas/ack el
+JSON con codigo escapado correctamente. HTTP 200 confirma, y HTTP 409 permite
+registrar una confirmacion que el servidor ya tenia. Solo entonces se escribe
+ts_ack; no se confunde la recepcion local con la confirmacion remota.
+
+Los fallos de red conservan las pendientes y usan espera creciente de hasta
+30 segundos. HTTP 503 y 429 respetan Retry-After. Cada ACK aceptado deja una
+pausa de 250 ms antes del siguiente. Si una alarma ya no existe y recibe 404,
+queda con ts_ack NULL y su codigo pasa a alarmas_no_vigentes: no se inventa una
+confirmacion ni se bloquea el resto de la cola. HTTP 400, 401 o 403 detienen
+el proceso con un diagnostico y conservan la alarma para revisar el problema.
+
+La suscripcion que termina se reconecta con esperas de 1, 2, 4, 8, 16 y hasta
+30 segundos. Recibir un mensaje reinicia esa espera. El broker puede repetir
+la ultima alarma retenida, y SQLite evita duplicar sus efectos. Al reiniciar
+el programa tambien se recuperan las confirmaciones que faltaban.
+
+Ctrl+C solo marca la solicitud de salida. La suscripcion tiene un callback
+de progreso que puede abortarla, y el bucle comprueba la bandera cada 100 ms.
+El cierre libera la red y SQLite; una alarma que no obtuvo confirmacion queda
+pendiente para la siguiente ejecucion.
+
+## Pruebas de las alarmas
+
+~~~bash
+python3 pruebas/verificar_alarmas.py
+~~~
+
+Dieciseis casos locales comprueban guardado anterior al ACK, mensajes
+fragmentados y consecutivos, reconexion y duplicados retenidos, respuesta
+perdida seguida de 409, Retry-After, reinicio, 404, caracteres especiales en
+el codigo, mensajes invalidos, cargas excesivas o con NUL, rafagas, acceso
+rechazado y validacion de argumentos. Tambien ejecutan enviar y escuchar a
+la vez sobre la misma base, con alarmas producidas a partir de los latidos.
+La prueba automatica de SIGINT se ejecuta en Linux; en Windows queda para
+una comprobacion manual de Ctrl+C en la consola.
+
+Los servidores de estas pruebas solo escuchan en 127.0.0.1 y usan una clave
+aleatoria. No consumen intentos del curso ni usan el token personal. GitHub
+Actions ejecuta las pruebas anteriores y las nuevas en Linux y Windows.
+
+## Sesion completa pendiente
+
+La comprobacion automatica local no asigna puntos en el servidor del profesor.
+La ultima consulta real confirmo 40/70: niveles 0, 1, 2 y 4. Los niveles 3 y 5
+requieren ejecutar enviar y escuchar a la vez en una sesion continua de al
+menos 15 minutos, recuperar las dos caidas programadas y atender al menos
+cinco alarmas. Debemos comprobar despues mi-progreso y guardar esa salida.
+
+Para una sesion de 20 minutos se puede iniciar escuchar con duracion 1320 y
+despues enviar con duracion 1200. El receptor queda un margen para las ultimas
+alarmas. Durante las respuestas 503 se dejan ambos programas funcionando:
+las lecturas siguen guardandose y se envian cuando termina la espera.
+
+[Formato de suscripcion MQTT](https://everything.curl.dev/usingcurl/mqtt.html)
+y [callback de progreso](https://curl.se/libcurl/c/CURLOPT_XFERINFOFUNCTION.html).
